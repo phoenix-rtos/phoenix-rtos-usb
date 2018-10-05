@@ -1,0 +1,29 @@
+#
+# Makefile for Phoenix-RTOS 3 device drivers
+#
+# ARM (Cortex-A5/A7/A9) options
+#
+# Copyright 2018 Phoenix Systems
+#
+
+CROSS ?= arm-phoenix-
+
+CC = $(CROSS)gcc
+
+CFLAGS += -Os -Wall -Wstrict-prototypes -g\
+	-mcpu=cortex-a7 -mtune=cortex-a7 -mfpu=neon-vfpv4 -mfloat-abi=hard -mthumb\
+	-fomit-frame-pointer -mno-unaligned-access
+
+CFLAGS += -fdata-sections -ffunction-sections
+
+LD = $(CROSS)ld
+LDFLAGS += -z max-page-size=0x1000
+LDFLAGS += --gc-sections
+
+GCCLIB := $(shell $(CC) $(CFLAGS) -print-libgcc-file-name)
+PHOENIXLIB := $(shell $(CC) $(CFLAGS) -print-file-name=libphoenix.a)
+LDLIBS += $(PHOENIXLIB) $(GCCLIB)
+
+OBJCOPY = $(CROSS)objcopy
+OBJDUMP = $(CROSS)objdump
+STRIP = $(CROSS)strip
