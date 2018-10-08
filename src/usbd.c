@@ -25,6 +25,7 @@
 #include <errno.h>
 
 #include <posix/idtree.h>
+#include <posix/utils.h>
 
 #include "dma.h"
 #include "ehci.h"
@@ -780,13 +781,19 @@ void msgthr(void *arg)
 
 int main(int argc, char **argv)
 {
+	oid_t oid;
 	portCreate(&usbd_common.port);
+
 	usbd_common.queues = NULL;
 	usbd_common.orphan_devices = NULL;
 	lib_rbInit(&usbd_common.drivers, usb_driver_cmp, NULL);
 	idtree_init(&usbd_common.devices);
 
 	ehci_init(usb_handleEvents);
+
+	oid.port = usbd_common.port;
+	oid.id = 0;
+	create_dev(&oid, "/dev/usb");
 
 	msgthr((void *)usbd_common.port);
 	return 0;
