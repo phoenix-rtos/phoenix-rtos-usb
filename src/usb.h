@@ -11,8 +11,8 @@
  * %LICENSE%
  */
 
-#ifndef IMX6ULL_USB_DESCRIPTORS_H
-#define IMX6ULL_USB_DESCRIPTORS_H
+#ifndef _USB_DESCRIPTORS_H_
+#define _USB_DESCRIPTORS_H_
 
 #define REQUEST_DIR_HOST2DEV  (0 << 7)
 #define REQUEST_DIR_DEV2HOST  (1 << 7)
@@ -43,6 +43,7 @@
 #define DESC_STRING 3
 #define DESC_INTERFACE 4
 #define DESC_ENDPOINT 5
+#define DESC_INTERFACE_ASSOCIATION 11
 
 
 #define USB_TIMEOUT 500000
@@ -109,6 +110,18 @@ typedef struct interface_desc {
 	unsigned char bInterfaceProtocol;
 	unsigned char iInterface;
 } __attribute__((packed)) interface_desc_t;
+
+
+typedef struct interface_association_desc {
+	unsigned char bLength;
+	unsigned char bDescriptorType;
+	unsigned char bFirstInterface;
+	unsigned char bInterfaceCount;
+	unsigned char bFunctionClass;
+	unsigned char bFunctionSubClass;
+	unsigned char bFunctionProtocol;
+	unsigned char iFunction;
+} __attribute__((packed)) interface_association_desc_t;
 
 
 typedef struct string_desc {
