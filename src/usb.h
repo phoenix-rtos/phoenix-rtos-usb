@@ -26,6 +26,7 @@
 #define REQUEST_RECIPIENT_ENDPOINT  2
 #define REQUEST_RECIPIENT_OTHER     3
 
+/* request types */
 #define GET_STATUS 0
 #define CLEAR_FEATURE 1
 #define SET_FEATURE 3
@@ -38,6 +39,7 @@
 #define SET_INTERFACE 11
 #define SYNCH_FRAME 12
 
+/* descriptor types */
 #define DESC_DEVICE 1
 #define DESC_CONFIG 2
 #define DESC_STRING 3

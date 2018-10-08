@@ -27,8 +27,8 @@
 #include <posix/idtree.h>
 #include <posix/utils.h>
 
-#include "dma.h"
-#include "ehci.h"
+#include <dma.h>
+#include <ehci.h>
 #include "usb.h"
 #include "usbd.h"
 
@@ -550,7 +550,7 @@ void usb_connectDriver(usb_driver_t *driver, usb_device_t *device, void *descrip
 	msg.type = mtDevCtl;
 	msg.i.data = descriptors;
 	msg.i.size = dlength;
-	insertion->id = idtree_id(&device->linkage);
+	insertion->device_id = idtree_id(&device->linkage);
 
 	if (msgSend(driver->port, &msg) < 0)
 		LIST_ADD(&driver->devices, device);

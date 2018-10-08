@@ -61,7 +61,7 @@ typedef struct {
 
 
 typedef struct {
-	int id;
+	int device_id;
 } usb_insertion_t;
 
 
