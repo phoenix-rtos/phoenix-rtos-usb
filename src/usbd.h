@@ -20,11 +20,12 @@
 
 
 typedef struct {
-	unsigned vendor;
-	unsigned device;
-	unsigned devclass;
-	unsigned subclass;
-	unsigned protocol;
+	unsigned idVendor;
+	unsigned idProduct;
+	unsigned bcdDevice;
+	unsigned bDeviceClass;
+	unsigned bDeviceSubClass;
+	unsigned bDeviceProtocol;
 } usb_device_id_t;
 
 
@@ -43,18 +44,24 @@ typedef struct {
 
 
 typedef struct {
-	enum { usb_msg_connect, usb_msg_urb } type;
+	int device_id;
+	endpoint_desc_t endpoint;
+} usb_open_t;
+
+
+typedef struct {
+	enum { usb_msg_connect, usb_msg_urb, usb_msg_open } type;
 
 	union {
 		usb_connect_t connect;
 		usb_urb_t urb;
+		usb_open_t open;
 	};
 } usb_msg_t;
 
 
 typedef struct {
 	int id;
-	usb_device_id_t device;
 } usb_insertion_t;
 
 

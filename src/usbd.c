@@ -24,6 +24,8 @@
 #include <string.h>
 #include <errno.h>
 
+#include <posix/idtree.h>
+
 #include "dma.h"
 #include "ehci.h"
 #include "usb.h"
@@ -42,29 +44,27 @@ typedef struct {
 	unsigned port;
 	usb_device_id_t filter;
 	usb_request_t *requests;
+	struct usb_device *devices;
 } usb_driver_t;
 
 
 typedef struct usb_endpoint {
 	struct usb_endpoint *next, *prev;
-	endpoint_desc_t *descriptor;
+	idnode_t linkage;
 
 	int speed;
-	// int transfer;
 	int max_packet_len;
 	int number;
-	int token;
 } usb_endpoint_t;
 
 
 typedef struct usb_device {
 	struct usb_device *next, *prev;
+	idnode_t linkage;
 
 	device_desc_t *descriptor;
 	char address;
-
-	int num_endpoints;
-	usb_endpoint_t *endpoints;
+	idtree_t pipes;
 } usb_device_t;
 
 
@@ -89,9 +89,10 @@ typedef struct usb_transfer {
 static struct {
 	usb_queue_t *queues;
 	usb_queue_t *async_head;
-	usb_device_t *devices;
+	usb_device_t *orphan_devices;
 
 	rbtree_t drivers;
+	idtree_t devices;
 	unsigned port;
 } usbd_common;
 
@@ -463,47 +464,173 @@ void usb_dumpConfiguration(FILE *stream, configuration_desc_t *desc)
 }
 
 
+int usb_driverMatch1(usb_driver_t *driver, usb_device_t *device)
+{
+	usb_device_id_t *filter = &driver->filter;
+	device_desc_t *descriptor = device->descriptor;
+
+	return (filter->idVendor == USB_CONNECT_WILDCARD || filter->idVendor == descriptor->idVendor) &&
+		(filter->idProduct == USB_CONNECT_WILDCARD || filter->idProduct == descriptor->idProduct) &&
+		(filter->bcdDevice == USB_CONNECT_WILDCARD || filter->bcdDevice == descriptor->bcdDevice);
+}
+
+
+int usb_driverMatch2(usb_driver_t *driver, usb_device_t *device)
+{
+	usb_device_id_t *filter = &driver->filter;
+	device_desc_t *descriptor = device->descriptor;
+
+	return (filter->idVendor == USB_CONNECT_WILDCARD || filter->idVendor == descriptor->idVendor) &&
+		(filter->idProduct == USB_CONNECT_WILDCARD || filter->idProduct == descriptor->idProduct);
+}
+
+
+int usb_driverMatch3(usb_driver_t *driver, usb_device_t *device)
+{
+	usb_device_id_t *filter = &driver->filter;
+	device_desc_t *descriptor = device->descriptor;
+
+	if (descriptor->bDeviceClass == 0xff) {
+		return (filter->idVendor == USB_CONNECT_WILDCARD || filter->idVendor == descriptor->idVendor) &&
+			(filter->bDeviceSubClass == USB_CONNECT_WILDCARD || filter->bDeviceSubClass == descriptor->bDeviceSubClass) &&
+			(filter->bDeviceProtocol == USB_CONNECT_WILDCARD || filter->bDeviceProtocol == descriptor->bDeviceProtocol);
+	}
+	else {
+		return (filter->bDeviceClass == USB_CONNECT_WILDCARD || filter->bDeviceClass == descriptor->bDeviceClass) &&
+			(filter->bDeviceSubClass == USB_CONNECT_WILDCARD || filter->bDeviceSubClass == descriptor->bDeviceSubClass) &&
+			(filter->bDeviceProtocol == USB_CONNECT_WILDCARD || filter->bDeviceProtocol == descriptor->bDeviceProtocol);
+	}
+}
+
+
+int usb_driverMatch4(usb_driver_t *driver, usb_device_t *device)
+{
+	usb_device_id_t *filter = &driver->filter;
+	device_desc_t *descriptor = device->descriptor;
+
+	if (descriptor->bDeviceClass == 0xff) {
+		return (filter->idVendor == USB_CONNECT_WILDCARD || filter->idVendor == descriptor->idVendor) &&
+			(filter->bDeviceSubClass == USB_CONNECT_WILDCARD || filter->bDeviceSubClass == descriptor->bDeviceSubClass);
+	}
+	else {
+		return (filter->bDeviceClass == USB_CONNECT_WILDCARD || filter->bDeviceClass == descriptor->bDeviceClass) &&
+			(filter->bDeviceSubClass == USB_CONNECT_WILDCARD || filter->bDeviceSubClass == descriptor->bDeviceSubClass);
+	}
+}
+
+
+usb_driver_t *usb_findDriver(usb_device_t *device)
+{
+	const int (*usb_driverMatch[])(usb_driver_t *, usb_device_t *) = {
+		usb_driverMatch1, usb_driverMatch2, usb_driverMatch3, usb_driverMatch4
+	};
+
+	rbnode_t *node;
+	usb_driver_t *driver;
+	int i;
+
+	for (i = 0; i < 4; ++i) {
+		for (node = lib_rbMinimum(usbd_common.drivers.root); node != NULL; node = lib_rbNext(node)) {
+			driver = lib_treeof(usb_driver_t, linkage, node);
+			if (usb_driverMatch[i](driver, device))
+				return driver;
+		}
+	}
+	return NULL;
+}
+
+
+void usb_connectDriver(usb_driver_t *driver, usb_device_t *device, void *descriptors, size_t dlength)
+{
+	msg_t msg;
+	usb_insertion_t *insertion = (void *)msg.i.raw;
+
+	memset(&msg, 0, sizeof(msg));
+	msg.type = mtDevCtl;
+	msg.i.data = descriptors;
+	msg.i.size = dlength;
+	insertion->id = idtree_id(&device->linkage);
+
+	if (msgSend(driver->port, &msg) < 0)
+		LIST_ADD(&driver->devices, device);
+	else
+		LIST_ADD(&usbd_common.orphan_devices, device);
+}
+
+
+usb_endpoint_t *usb_findPipe(usb_device_t *device, int pipe)
+{
+	return lib_treeof(usb_endpoint_t, linkage, idtree_find(&device->pipes, pipe));
+}
+
+
+int usb_openPipe(usb_device_t *device, endpoint_desc_t *descriptor)
+{
+	usb_endpoint_t *pipe = malloc(sizeof(usb_endpoint_t));
+	pipe->speed = high_speed;
+	pipe->max_packet_len = descriptor->wMaxPacketSize;
+	pipe->number = descriptor->bEndpointAddress & 0xf;
+	return idtree_alloc(&device->pipes, &pipe->linkage);
+}
+
+
 void usb_deviceAttach(void)
 {
 	usb_device_t *dev;
 	usb_endpoint_t *ep;
+	usb_driver_t *driver;
 	void *buf;
-	size_t cfgsz;
-
+	size_t bufsz;
+	void *descriptors;
+	configuration_desc_t *cdesc;
 	device_desc_t *ddesc = dma_alloc64();
-	configuration_desc_t *cdesc = dma_alloc64();
 
 	ehci_resetPort();
-	ehci_await(USB_TIMEOUT);
+	ehci_await(0);
 
-	dev = usbd_common.devices = calloc(1, sizeof(usb_device_t));
-	ep = dev->endpoints = calloc(1, sizeof(usb_endpoint_t));
+	dev = calloc(1, sizeof(usb_device_t));
+	ep = calloc(1, sizeof(usb_endpoint_t));
 
 	ep->number = 0;
 	ep->speed = high_speed;
 	ep->max_packet_len = 64;
 
+	idtree_alloc(&dev->pipes, &ep->linkage);
+
 	usb_getDeviceDescriptor(dev, ep, ddesc);
 	ehci_resetPort();
-	ehci_await(0);
 
 	dev->descriptor = ddesc;
 	ep->max_packet_len = ddesc->bMaxPacketSize0;
+	ehci_await(0);
 
 	usb_dumpDeviceDescriptor(stdout, ddesc);
 
 	usb_setAddress(dev, ep, 1);
 	dev->address = 1;
 
-	usb_getConfigurationDescriptor(dev, ep, cdesc, 0, sizeof(configuration_desc_t));
-	cfgsz = (cdesc->wTotalLength + SIZE_PAGE - 1) & ~(SIZE_PAGE - 1);
-	buf = mmap(NULL, cfgsz, PROT_WRITE | PROT_READ, MAP_ANONYMOUS | MAP_UNCACHED, OID_NULL, 0);
-	usb_getConfigurationDescriptor(dev, ep, buf, 0, cdesc->wTotalLength);
+	idtree_alloc(&usbd_common.devices, &dev->linkage);
 
-	dma_free64(ddesc);
-	dma_free64(cdesc);
-	munmap(buf, cfgsz);
-	return;
+	if ((driver = usb_findDriver(dev)) != NULL) {
+		cdesc = dma_alloc64();
+		usb_getConfigurationDescriptor(dev, ep, cdesc, 0, sizeof(configuration_desc_t));
+		bufsz = (cdesc->wTotalLength + SIZE_PAGE - 1) & ~(SIZE_PAGE - 1);
+		buf = mmap(NULL, bufsz, PROT_WRITE | PROT_READ, MAP_ANONYMOUS | MAP_UNCACHED, OID_NULL, 0);
+		usb_getConfigurationDescriptor(dev, ep, buf, 0, cdesc->wTotalLength);
+
+		if ((descriptors = malloc(ddesc->bLength + cdesc->wTotalLength)) != NULL) {
+			memcpy(descriptors, ddesc, ddesc->bLength);
+			memcpy(descriptors + ddesc->bLength, buf, cdesc->wTotalLength);
+		}
+
+		usb_connectDriver(driver, dev, descriptors, ddesc->bLength + cdesc->wTotalLength);
+
+		free(descriptors);
+		dma_free64(cdesc);
+		munmap(buf, bufsz);
+	} else {
+		LIST_ADD(&usbd_common.orphan_devices, dev);
+	}
 }
 
 
@@ -527,9 +654,9 @@ int usb_driver_cmp(rbnode_t *n1, rbnode_t *n2)
 	usb_driver_t *d1 = lib_treeof(usb_driver_t, linkage, n1);
 	usb_driver_t *d2 = lib_treeof(usb_driver_t, linkage, n2);
 
-	if (d1->port > d2->port)
+	if (d1->pid > d2->pid)
 		return 1;
-	else if (d1->port < d2->port)
+	else if (d1->pid < d2->pid)
 		return -1;
 
 	return 0;
@@ -563,6 +690,12 @@ int usb_urb(usb_urb_t *u, msg_t *msg)
 
 	find.pid = msg->pid;
 	if ((driver = lib_treeof(usb_driver_t, linkage, lib_rbFind(&usbd_common.drivers, &find.linkage))) == NULL)
+		return -EINVAL;
+
+	if ((device = lib_treeof(usb_device_t, linkage, idtree_find(&usbd_common.devices, u->device_id))) == NULL)
+		return -EINVAL;
+
+	if ((endpoint = lib_treeof(usb_endpoint_t, linkage, idtree_find(&device->pipes, u->pipe))) == NULL)
 		return -EINVAL;
 
 	switch (u->type) {
@@ -599,6 +732,17 @@ int usb_urb(usb_urb_t *u, msg_t *msg)
 }
 
 
+int usb_open(usb_open_t *o, msg_t *msg)
+{
+	usb_device_t *device;
+
+	if ((device = lib_treeof(usb_device_t, linkage, idtree_find(&usbd_common.devices, o->device_id))) == NULL)
+		return -EINVAL;
+
+	return usb_openPipe(device, &o->endpoint);
+}
+
+
 void msgthr(void *arg)
 {
 	unsigned port = (int)arg;
@@ -620,6 +764,9 @@ void msgthr(void *arg)
 			case usb_msg_urb:
 				msg.o.io.err = usb_urb(&umsg->urb, &msg);
 				break;
+			case usb_msg_open:
+				msg.o.io.err = usb_open(&umsg->open, &msg);
+				break;
 			}
 		}
 		else {
@@ -635,8 +782,9 @@ int main(int argc, char **argv)
 {
 	portCreate(&usbd_common.port);
 	usbd_common.queues = NULL;
-	usbd_common.devices = NULL;
+	usbd_common.orphan_devices = NULL;
 	lib_rbInit(&usbd_common.drivers, usb_driver_cmp, NULL);
+	idtree_init(&usbd_common.devices);
 
 	ehci_init(usb_handleEvents);
 
