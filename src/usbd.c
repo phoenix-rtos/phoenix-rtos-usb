@@ -33,6 +33,9 @@
 #include "usbd.h"
 
 
+#define FUN_TRACE fprintf(stderr, "usbd trace: %s\n", __PRETTY_FUNCTION__)
+#define TRACE(x, ...) fprintf(stderr, "usbd: " x "\n" __VA_ARGS__)
+
 typedef struct usb_request {
 	struct usb_request *next, *prev;
 	usb_urb_t urb;
@@ -61,6 +64,7 @@ typedef struct usb_endpoint {
 
 typedef struct usb_device {
 	struct usb_device *next, *prev;
+	struct usb_driver_t *driver;
 	idnode_t linkage;
 
 	device_desc_t *descriptor;
@@ -100,6 +104,8 @@ static struct {
 
 usb_queue_t *usb_allocQueue(usb_device_t *dev, usb_endpoint_t *ep, int transfer)
 {
+	FUN_TRACE;
+
 	usb_queue_t *result = malloc(sizeof(usb_queue_t));
 
 	if (result == NULL)
@@ -121,6 +127,8 @@ usb_queue_t *usb_allocQueue(usb_device_t *dev, usb_endpoint_t *ep, int transfer)
 
 usb_transfer_t *usb_appendTransfer(usb_queue_t *queue, int token, char *buffer, size_t *size, int datax)
 {
+	FUN_TRACE;
+
 	usb_transfer_t *transfer = malloc(sizeof(usb_transfer_t));
 
 	if (transfer == NULL)
@@ -138,6 +146,7 @@ usb_transfer_t *usb_appendTransfer(usb_queue_t *queue, int token, char *buffer, 
 
 void usb_linkTransfers(usb_queue_t *queue)
 {
+	FUN_TRACE;
 	usb_transfer_t *transfer = queue->transfers->prev;
 	transfer->qtd->ioc = 1;
 
@@ -150,6 +159,7 @@ void usb_linkTransfers(usb_queue_t *queue)
 
 void usb_deleteUnlinkedQueue(usb_queue_t *queue)
 {
+	FUN_TRACE;
 	usb_transfer_t *transfer;
 
 	while ((transfer = queue->transfers) != NULL) {
@@ -165,6 +175,7 @@ void usb_deleteUnlinkedQueue(usb_queue_t *queue)
 
 void usb_deleteQueue(usb_queue_t *queue)
 {
+	FUN_TRACE;
 	ehci_unlinkQh(queue->prev->qh, queue->qh, queue->next->qh);
 	LIST_REMOVE(&usbd_common.queues, queue);
 	usb_deleteUnlinkedQueue(queue);
@@ -173,6 +184,8 @@ void usb_deleteQueue(usb_queue_t *queue)
 
 void usb_linkAsync(usb_queue_t *queue)
 {
+	FUN_TRACE;
+
 	LIST_ADD(&usbd_common.queues, queue);
 
 	if (queue == queue->next) {
@@ -187,10 +200,12 @@ void usb_linkAsync(usb_queue_t *queue)
 
 int usb_control(usb_device_t *dev, usb_endpoint_t *ep, setup_packet_t *packet, void *buffer, int ssize_in)
 {
+	FUN_TRACE;
+
 	usb_queue_t *queue;
 	int data_token, control_token;
 	size_t size;
-	int dt;
+	int dt, err;
 
 	data_token = ssize_in <= 0 ? out_token : in_token;
 	control_token = data_token == out_token ? in_token : out_token;
@@ -224,12 +239,18 @@ int usb_control(usb_device_t *dev, usb_endpoint_t *ep, setup_packet_t *packet, v
 
 	usb_linkTransfers(queue);
 	usb_linkAsync(queue);
-	return EOK;
+
+	err = ehci_await(USB_TIMEOUT);
+	usb_deleteQueue(queue);
+
+	return err;
 }
 
 
 int usb_setAddress(usb_device_t *dev, usb_endpoint_t *ep, unsigned char address)
 {
+	FUN_TRACE;
+
 	int retval;
 	setup_packet_t *setup = dma_alloc64();
 
@@ -240,8 +261,6 @@ int usb_setAddress(usb_device_t *dev, usb_endpoint_t *ep, unsigned char address)
 	setup->wLength = 0;
 
 	retval = usb_control(dev, ep, setup, NULL, 0);
-	ehci_await(USB_TIMEOUT);
-	usb_deleteQueue(usbd_common.queues);
 	dma_free64(setup);
 
 	return retval;
@@ -250,6 +269,8 @@ int usb_setAddress(usb_device_t *dev, usb_endpoint_t *ep, unsigned char address)
 
 int usb_getDescriptor(usb_device_t *dev, usb_endpoint_t *ep, int descriptor, int index, char *buffer, int size)
 {
+	FUN_TRACE;
+
 	int retval;
 	setup_packet_t *setup = dma_alloc64();
 
@@ -260,8 +281,6 @@ int usb_getDescriptor(usb_device_t *dev, usb_endpoint_t *ep, int descriptor, int
 	setup->wLength = size;
 
 	retval = usb_control(dev, ep, setup, buffer, size);
-	ehci_await(USB_TIMEOUT);
-	usb_deleteQueue(usbd_common.queues);
 	dma_free64(setup);
 
 	return retval;
@@ -310,8 +329,6 @@ int usb_setConfiguration(usb_device_t *dev, usb_endpoint_t *ep, int value)
 	setup->wLength = 0;
 
 	retval = usb_control(dev, ep, setup, NULL, 0);
-	ehci_await(USB_TIMEOUT);
-	usb_deleteQueue(usbd_common.queues);
 	dma_free64(setup);
 
 	return retval;
@@ -330,8 +347,6 @@ int usb_setInterface(usb_device_t *dev, usb_endpoint_t *ep, int alt, int index)
 	setup->wLength = 0;
 
 	retval = usb_control(dev, ep, setup, NULL, 0);
-	ehci_await(USB_TIMEOUT);
-	usb_deleteQueue(usbd_common.queues);
 	dma_free64(setup);
 
 	return retval;
@@ -340,6 +355,8 @@ int usb_setInterface(usb_device_t *dev, usb_endpoint_t *ep, int alt, int index)
 
 int usb_bulk(usb_device_t *dev, usb_endpoint_t *ep, int token, void *buffer, size_t size)
 {
+	FUN_TRACE;
+
 	usb_queue_t *queue;
 
 	if ((queue = usb_allocQueue(dev, ep, transfer_bulk)) == NULL)
@@ -441,8 +458,8 @@ void usb_dumpDescriptor(FILE *stream, struct desc_header *desc)
 		usb_dumpEndpointDescriptor(stream, (void *)desc);
 		break;
 
-	default:
-		printf("UNRECOGNIZED DESCRIPTOR (%d)\n", desc->bDescriptorType);
+		default:
+		fprintf(stream, "UNRECOGNIZED DESCRIPTOR (%d)\n", desc->bDescriptorType);
 		break;
 	}
 }
@@ -522,6 +539,8 @@ int usb_driverMatch4(usb_driver_t *driver, usb_device_t *device)
 
 usb_driver_t *usb_findDriver(usb_device_t *device)
 {
+	FUN_TRACE;
+
 	const int (*usb_driverMatch[])(usb_driver_t *, usb_device_t *) = {
 		usb_driverMatch1, usb_driverMatch2, usb_driverMatch3, usb_driverMatch4
 	};
@@ -533,8 +552,10 @@ usb_driver_t *usb_findDriver(usb_device_t *device)
 	for (i = 0; i < 4; ++i) {
 		for (node = lib_rbMinimum(usbd_common.drivers.root); node != NULL; node = lib_rbNext(node)) {
 			driver = lib_treeof(usb_driver_t, linkage, node);
-			if (usb_driverMatch[i](driver, device))
+			if (usb_driverMatch[i](driver, device)) {
+				TRACE("found driver");
 				return driver;
+			}
 		}
 	}
 	return NULL;
@@ -543,6 +564,8 @@ usb_driver_t *usb_findDriver(usb_device_t *device)
 
 void usb_connectDriver(usb_driver_t *driver, usb_device_t *device, void *descriptors, size_t dlength)
 {
+	FUN_TRACE;
+
 	msg_t msg;
 	usb_insertion_t *insertion = (void *)msg.i.raw;
 
@@ -550,6 +573,7 @@ void usb_connectDriver(usb_driver_t *driver, usb_device_t *device, void *descrip
 	msg.type = mtDevCtl;
 	msg.i.data = descriptors;
 	msg.i.size = dlength;
+
 	insertion->device_id = idtree_id(&device->linkage);
 
 	if (msgSend(driver->port, &msg) < 0)
@@ -567,8 +591,11 @@ usb_endpoint_t *usb_findPipe(usb_device_t *device, int pipe)
 
 int usb_openPipe(usb_device_t *device, endpoint_desc_t *descriptor)
 {
+	FUN_TRACE;
+
 	usb_endpoint_t *pipe = malloc(sizeof(usb_endpoint_t));
 	pipe->speed = high_speed;
+
 	pipe->max_packet_len = descriptor->wMaxPacketSize;
 	pipe->number = descriptor->bEndpointAddress & 0xf;
 	return idtree_alloc(&device->pipes, &pipe->linkage);
@@ -577,6 +604,8 @@ int usb_openPipe(usb_device_t *device, endpoint_desc_t *descriptor)
 
 void usb_deviceAttach(void)
 {
+	FUN_TRACE;
+	// asm volatile ("1: b 1b");
 	usb_device_t *dev;
 	usb_endpoint_t *ep;
 	usb_driver_t *driver;
@@ -586,8 +615,9 @@ void usb_deviceAttach(void)
 	configuration_desc_t *cdesc;
 	device_desc_t *ddesc = dma_alloc64();
 
+	TRACE("reset");
 	ehci_resetPort();
-	ehci_await(0);
+	ehci_await(USB_TIMEOUT);
 
 	dev = calloc(1, sizeof(usb_device_t));
 	ep = calloc(1, sizeof(usb_endpoint_t));
@@ -598,21 +628,27 @@ void usb_deviceAttach(void)
 
 	idtree_alloc(&dev->pipes, &ep->linkage);
 
+
+	TRACE("getting device descriptor");
 	usb_getDeviceDescriptor(dev, ep, ddesc);
-	ehci_resetPort();
+
+	//TRACE("reset 2");
+	//ehci_resetPort();
 
 	dev->descriptor = ddesc;
 	ep->max_packet_len = ddesc->bMaxPacketSize0;
-	ehci_await(0);
+	//ehci_await(USB_TIMEOUT);
 
-	usb_dumpDeviceDescriptor(stdout, ddesc);
+	usb_dumpDeviceDescriptor(stderr, ddesc);
 
+	TRACE("setting address");
 	usb_setAddress(dev, ep, 1);
 	dev->address = 1;
 
 	idtree_alloc(&usbd_common.devices, &dev->linkage);
 
 	if ((driver = usb_findDriver(dev)) != NULL) {
+		TRACE("got driver");
 		cdesc = dma_alloc64();
 		usb_getConfigurationDescriptor(dev, ep, cdesc, 0, sizeof(configuration_desc_t));
 		bufsz = (cdesc->wTotalLength + SIZE_PAGE - 1) & ~(SIZE_PAGE - 1);
@@ -625,11 +661,13 @@ void usb_deviceAttach(void)
 		}
 
 		usb_connectDriver(driver, dev, descriptors, ddesc->bLength + cdesc->wTotalLength);
+		TRACE("connected");
 
 		free(descriptors);
 		dma_free64(cdesc);
 		munmap(buf, bufsz);
 	} else {
+		TRACE("no driver");
 		LIST_ADD(&usbd_common.orphan_devices, dev);
 	}
 }
@@ -637,15 +675,33 @@ void usb_deviceAttach(void)
 
 void usb_deviceDetach(void)
 {
-	printf("detach\n");
+	FUN_TRACE;
+	usb_device_t *device = lib_treeof(usb_device_t, linkage, usbd_common.devices.root);
+
+	if (device != NULL) {
+		idtree_remove(&usbd_common.devices, &device->linkage);
+
+		if (device->driver != NULL) {
+			//LIST_REMOVE(&device->driver->devices, &device);
+			device->driver = NULL;
+		}
+	}
+
+	ehci_dumpRegisters(stdout);
+	//ehci_resetPort();
+	//ehci_await(USB_TIMEOUT);
 }
 
 
 void usb_handleEvents(int port_change)
 {
+	FUN_TRACE;
+
 	if (port_change && ehci_deviceAttached()) {
 		usb_deviceAttach();
-		return;
+	}
+	else if (port_change) {
+		usb_deviceDetach();
 	}
 }
 
@@ -666,6 +722,8 @@ int usb_driver_cmp(rbnode_t *n1, rbnode_t *n2)
 
 int usb_connect(usb_connect_t *c, unsigned pid)
 {
+	FUN_TRACE;
+
 	usb_driver_t *driver = malloc(sizeof(*driver));
 
 	if (driver == NULL)
@@ -683,6 +741,8 @@ int usb_connect(usb_connect_t *c, unsigned pid)
 
 int usb_urb(usb_urb_t *u, msg_t *msg)
 {
+	FUN_TRACE;
+
 	usb_driver_t find, *driver;
 	usb_device_t *device;
 	usb_endpoint_t *endpoint;
@@ -704,12 +764,11 @@ int usb_urb(usb_urb_t *u, msg_t *msg)
 		setup = dma_alloc64();
 		*setup = u->setup;
 		if (msg->i.size)
-			usb_control(device, endpoint, setup, msg->i.data, -msg->i.size);
+			err = usb_control(device, endpoint, setup, msg->i.data, -msg->i.size);
 		else if (msg->o.size)
-			usb_control(device, endpoint, setup, msg->o.data, msg->o.size);
+			err = usb_control(device, endpoint, setup, msg->o.data, msg->o.size);
 		else
-			usb_control(device, endpoint, setup, NULL, 0);
-		err = ehci_await(USB_TIMEOUT);
+			err = usb_control(device, endpoint, setup, NULL, 0);
 		dma_free64(setup);
 		break;
 
@@ -725,7 +784,7 @@ int usb_urb(usb_urb_t *u, msg_t *msg)
 
 	case usb_transfer_interrupt:
 	case usb_transfer_isochronous:
-	default:
+		default:
 		err = -ENOSYS;
 	}
 
@@ -735,6 +794,7 @@ int usb_urb(usb_urb_t *u, msg_t *msg)
 
 int usb_open(usb_open_t *o, msg_t *msg)
 {
+	FUN_TRACE;
 	usb_device_t *device;
 
 	if ((device = lib_treeof(usb_device_t, linkage, idtree_find(&usbd_common.devices, o->device_id))) == NULL)
@@ -752,9 +812,11 @@ void msgthr(void *arg)
 	usb_msg_t *umsg;
 
 	for (;;) {
+		TRACE("receiving");
 		if (msgRecv(port, &msg, &rid) < 0)
 			continue;
 
+		TRACE("got message");
 		if (msg.type == mtDevCtl) {
 			umsg = (void *)msg.i.raw;
 
@@ -781,6 +843,7 @@ void msgthr(void *arg)
 
 int main(int argc, char **argv)
 {
+	FUN_TRACE;
 	oid_t oid;
 	portCreate(&usbd_common.port);
 
