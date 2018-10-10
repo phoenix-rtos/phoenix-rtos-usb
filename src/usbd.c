@@ -864,7 +864,7 @@ int usb_urb(usb_urb_t *u, msg_t *msg)
 		setup = dma_alloc64();
 		*setup = u->setup;
 		if (msg->i.size)
-			err = usb_control(device, endpoint, setup, msg->i.data, -msg->i.size);
+			err = usb_control(device, endpoint, setup, msg->i.data, -(int)msg->i.size);
 		else if (msg->o.size)
 			err = usb_control(device, endpoint, setup, msg->o.data, msg->o.size);
 		else
