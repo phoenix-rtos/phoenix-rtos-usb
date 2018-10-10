@@ -458,7 +458,7 @@ void usb_dumpDescriptor(FILE *stream, struct desc_header *desc)
 		usb_dumpEndpointDescriptor(stream, (void *)desc);
 		break;
 
-		default:
+	default:
 		fprintf(stream, "UNRECOGNIZED DESCRIPTOR (%d)\n", desc->bDescriptorType);
 		break;
 	}
@@ -562,7 +562,7 @@ usb_driver_t *usb_findDriver(usb_device_t *device)
 }
 
 
-void usb_connectDriver(usb_driver_t *driver, usb_device_t *device, void *descriptors, size_t dlength)
+void usb_connectDriver(usb_driver_t *driver, usb_device_t *device, configuration_desc_t *configuration)
 {
 	FUN_TRACE;
 
@@ -571,10 +571,11 @@ void usb_connectDriver(usb_driver_t *driver, usb_device_t *device, void *descrip
 
 	memset(&msg, 0, sizeof(msg));
 	msg.type = mtDevCtl;
-	msg.i.data = descriptors;
-	msg.i.size = dlength;
+	msg.i.data = configuration;
+	msg.i.size = configuration->wTotalLength;
 
 	insertion->device_id = idtree_id(&device->linkage);
+	memcpy(&insertion->descriptor, device->descriptor, sizeof(device_desc_t));
 
 	if (msgSend(driver->port, &msg) < 0)
 		LIST_ADD(&driver->devices, device);
@@ -602,6 +603,26 @@ int usb_openPipe(usb_device_t *device, endpoint_desc_t *descriptor)
 }
 
 
+int usb_getConfiguration(usb_device_t *device, void *buffer, size_t bufsz)
+{
+	configuration_desc_t *conf = dma_alloc64();
+	usb_endpoint_t control_endpt = {
+		.number = 0,
+		.speed = high_speed,
+		.max_packet_len = 64,
+	};
+
+	usb_getConfigurationDescriptor(device, &control_endpt, conf, 0, sizeof(configuration_desc_t));
+
+	if (bufsz < conf->wTotalLength)
+		return -ENOBUFS;
+
+	usb_getConfigurationDescriptor(device, &control_endpt, buffer, 0, conf->wTotalLength);
+	dma_free64(conf);
+	return EOK;
+}
+
+
 void usb_deviceAttach(void)
 {
 	FUN_TRACE;
@@ -609,10 +630,7 @@ void usb_deviceAttach(void)
 	usb_device_t *dev;
 	usb_endpoint_t *ep;
 	usb_driver_t *driver;
-	void *buf;
-	size_t bufsz;
-	void *descriptors;
-	configuration_desc_t *cdesc;
+	void *configuration;
 	device_desc_t *ddesc = dma_alloc64();
 
 	TRACE("reset");
@@ -649,24 +667,13 @@ void usb_deviceAttach(void)
 
 	if ((driver = usb_findDriver(dev)) != NULL) {
 		TRACE("got driver");
-		cdesc = dma_alloc64();
-		usb_getConfigurationDescriptor(dev, ep, cdesc, 0, sizeof(configuration_desc_t));
-		bufsz = (cdesc->wTotalLength + SIZE_PAGE - 1) & ~(SIZE_PAGE - 1);
-		buf = mmap(NULL, bufsz, PROT_WRITE | PROT_READ, MAP_ANONYMOUS | MAP_UNCACHED, OID_NULL, 0);
-		usb_getConfigurationDescriptor(dev, ep, buf, 0, cdesc->wTotalLength);
+		configuration = mmap(NULL, SIZE_PAGE, PROT_WRITE | PROT_READ, MAP_ANONYMOUS | MAP_UNCACHED, OID_NULL, 0);
+		usb_getConfiguration(dev, configuration, SIZE_PAGE);
+		usb_connectDriver(driver, dev, configuration);
 
-		if ((descriptors = malloc(ddesc->bLength + cdesc->wTotalLength)) != NULL) {
-			memcpy(descriptors, ddesc, ddesc->bLength);
-			memcpy(descriptors + ddesc->bLength, buf, cdesc->wTotalLength);
-		}
-
-		usb_connectDriver(driver, dev, descriptors, ddesc->bLength + cdesc->wTotalLength);
-		TRACE("connected");
-
-		free(descriptors);
-		dma_free64(cdesc);
-		munmap(buf, bufsz);
-	} else {
+		munmap(configuration, SIZE_PAGE);
+	}
+	else {
 		TRACE("no driver");
 		LIST_ADD(&usbd_common.orphan_devices, dev);
 	}
@@ -687,7 +694,7 @@ void usb_deviceDetach(void)
 		}
 	}
 
-	ehci_dumpRegisters(stdout);
+	//ehci_dumpRegisters(stdout);
 	//ehci_resetPort();
 	//ehci_await(USB_TIMEOUT);
 }
@@ -724,7 +731,14 @@ int usb_connect(usb_connect_t *c, unsigned pid)
 {
 	FUN_TRACE;
 
+	const int (*usb_driverMatch[])(usb_driver_t *, usb_device_t *) = {
+		usb_driverMatch1, usb_driverMatch2, usb_driverMatch3, usb_driverMatch4
+	};
+
+	int i;
 	usb_driver_t *driver = malloc(sizeof(*driver));
+	usb_device_t *device;
+	void *configuration;
 
 	if (driver == NULL)
 		return -ENOMEM;
@@ -735,6 +749,30 @@ int usb_connect(usb_connect_t *c, unsigned pid)
 	driver->requests = NULL;
 
 	lib_rbInsert(&usbd_common.drivers, &driver->linkage);
+
+	if (usbd_common.orphan_devices != NULL) {
+		configuration = mmap(NULL, SIZE_PAGE, PROT_WRITE | PROT_READ, MAP_ANONYMOUS | MAP_UNCACHED, OID_NULL, 0);
+
+		if (configuration == MAP_FAILED)
+			return -ENOMEM;
+
+		for (i = 0; i < 4; ++i) {
+			if ((device = usbd_common.orphan_devices) != NULL) {
+				do {
+					while (usb_driverMatch[i](driver, device)) {
+						usb_getConfiguration(device, configuration, SIZE_PAGE);
+						usb_connectDriver(driver, device, configuration);
+						device = device->next;
+						LIST_REMOVE(&usbd_common.orphan_devices, device->prev);
+					}
+				}
+				while ((device = device->next) != usbd_common.orphan_devices);
+			}
+		}
+
+		munmap(configuration, SIZE_PAGE);
+	}
+
 	return EOK;
 }
 
@@ -784,7 +822,7 @@ int usb_urb(usb_urb_t *u, msg_t *msg)
 
 	case usb_transfer_interrupt:
 	case usb_transfer_isochronous:
-		default:
+	default:
 		err = -ENOSYS;
 	}
 

@@ -16,6 +16,8 @@
 #ifndef _USBD_H_
 #define _USBD_H_
 
+#include "usb.h"
+
 #define USB_CONNECT_WILDCARD ((unsigned)-1)
 
 
@@ -62,6 +64,7 @@ typedef struct {
 
 typedef struct {
 	int device_id;
+	device_desc_t descriptor;
 } usb_insertion_t;
 
 
