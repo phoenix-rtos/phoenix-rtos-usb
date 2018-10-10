@@ -66,6 +66,7 @@ typedef struct usb_device {
 	struct usb_device *next, *prev;
 	usb_driver_t *driver;
 	idnode_t linkage;
+	handle_t cond, lock;
 
 	device_desc_t *descriptor;
 	char address;
@@ -99,6 +100,8 @@ static struct {
 	rbtree_t drivers;
 	idtree_t devices;
 	unsigned port;
+
+	handle_t port_lock, port_cond;
 } usbd_common;
 
 
@@ -198,6 +201,20 @@ void usb_linkAsync(usb_queue_t *queue)
 }
 
 
+int usb_wait(usb_device_t *dev, int timeout)
+{
+	int err;
+
+	mutexLock(dev->lock);
+	if ((err = condWait(dev->cond, dev->lock, timeout)) < 0) {
+		TRACE("wait error %d", err);
+	}
+	mutexUnlock(dev->lock);
+
+	return err;
+}
+
+
 int usb_control(usb_device_t *dev, usb_endpoint_t *ep, setup_packet_t *packet, void *buffer, int ssize_in)
 {
 	FUN_TRACE;
@@ -240,7 +257,8 @@ int usb_control(usb_device_t *dev, usb_endpoint_t *ep, setup_packet_t *packet, v
 	usb_linkTransfers(queue);
 	usb_linkAsync(queue);
 
-	err = ehci_await(USB_TIMEOUT);
+	err = usb_wait(dev, USB_TIMEOUT);
+
 	usb_deleteQueue(queue);
 
 	return err;
@@ -357,6 +375,7 @@ int usb_bulk(usb_device_t *dev, usb_endpoint_t *ep, int token, void *buffer, siz
 {
 	FUN_TRACE;
 
+	int err;
 	usb_queue_t *queue;
 
 	if ((queue = usb_allocQueue(dev, ep, transfer_bulk)) == NULL)
@@ -372,9 +391,9 @@ int usb_bulk(usb_device_t *dev, usb_endpoint_t *ep, int token, void *buffer, siz
 	usb_linkTransfers(queue);
 	usb_linkAsync(queue);
 
-	ehci_await(USB_TIMEOUT);
+	err = usb_wait(dev, USB_TIMEOUT);
 	usb_deleteQueue(queue);
-	return EOK;
+	return err;
 }
 
 
@@ -634,9 +653,12 @@ void usb_deviceAttach(void)
 
 	TRACE("reset");
 	ehci_resetPort();
-	ehci_await(USB_TIMEOUT);
 
 	dev = calloc(1, sizeof(usb_device_t));
+
+	mutexCreate(&dev->lock);
+	condCreate(&dev->cond);
+
 	ep = calloc(1, sizeof(usb_endpoint_t));
 
 	ep->number = 0;
@@ -649,12 +671,8 @@ void usb_deviceAttach(void)
 	TRACE("getting device descriptor");
 	usb_getDeviceDescriptor(dev, ep, ddesc);
 
-	//TRACE("reset 2");
-	//ehci_resetPort();
-
 	dev->descriptor = ddesc;
 	ep->max_packet_len = ddesc->bMaxPacketSize0;
-	//ehci_await(USB_TIMEOUT);
 
 	usb_dumpDeviceDescriptor(stderr, ddesc);
 
@@ -698,23 +716,56 @@ void usb_deviceDetach(void)
 			device->driver = NULL;
 		}
 	}
-
-	//ehci_dumpRegisters(stdout);
-	//ehci_resetPort();
-	//ehci_await(USB_TIMEOUT);
 }
 
 
-void usb_handleEvents(int port_change)
+void usb_portthr(void *arg)
+{
+	int attached = 0;
+
+	mutexLock(usbd_common.port_lock);
+
+	for (;;) {
+		condWait(usbd_common.port_cond, usbd_common.port_lock, 0);
+		FUN_TRACE;
+
+		if (ehci_deviceAttached()) {
+			if (attached) {
+				TRACE("double attach");
+			}
+			else {
+				usb_deviceAttach();
+				attached = 1;
+			}
+		}
+		else {
+			if (!attached) {
+				TRACE("double detach");
+			}
+			else {
+				usb_deviceDetach();
+				attached = 0;
+			}
+		}
+	}
+}
+
+
+void usb_eventCallback(int port_change)
 {
 	FUN_TRACE;
+	usb_queue_t *queue;
 
-	if (port_change && ehci_deviceAttached()) {
-		usb_deviceAttach();
+	if ((queue = usbd_common.queues) != NULL) {
+		do {
+			if (ehci_qhFinished(queue->qh))
+				condSignal(queue->device->cond);
+		}
+		while (queue != usbd_common.queues);
 	}
-	else if (port_change) {
-		usb_deviceDetach();
-	}
+
+	if (port_change)
+		condSignal(usbd_common.port_cond);
 }
 
 
@@ -896,17 +947,21 @@ int main(int argc, char **argv)
 	oid_t oid;
 	portCreate(&usbd_common.port);
 
+	mutexCreate(&usbd_common.port_lock);
+	condCreate(&usbd_common.port_cond);
+
 	usbd_common.queues = NULL;
 	usbd_common.orphan_devices = NULL;
 	lib_rbInit(&usbd_common.drivers, usb_driver_cmp, NULL);
 	idtree_init(&usbd_common.devices);
 
-	ehci_init(usb_handleEvents);
+	ehci_init(usb_eventCallback);
 
 	oid.port = usbd_common.port;
 	oid.id = 0;
 	create_dev(&oid, "/dev/usb");
 
+	beginthread(usb_portthr, 4, malloc(0x4000), 0x4000, NULL);
 	msgthr((void *)usbd_common.port);
 	return 0;
 }
