@@ -47,6 +47,10 @@
 #define DESC_ENDPOINT 5
 #define DESC_INTERFACE_ASSOCIATION 11
 
+/* class specific desctriptors */
+#define DESC_CS_INTERFACE 0x24
+#define DESC_CS_ENDPOINT 0x25
+
 
 #define USB_TIMEOUT 500000
 
@@ -141,6 +145,13 @@ typedef struct endpoint_desc {
 	unsigned short wMaxPacketSize;
 	unsigned char  bInterval;
 } __attribute__((packed)) endpoint_desc_t;
+
+
+typedef struct functional_desc {
+	unsigned char bFunctionLength;
+	unsigned char bDescriptorType;
+	unsigned char bDescriptorSubtype;
+} __attribute__((packed)) functional_desc_t;
 
 
 #endif

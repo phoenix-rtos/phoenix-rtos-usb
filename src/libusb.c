@@ -286,6 +286,13 @@ static void libusb_dumpInterfaceAssociationDescriptor(FILE *stream, interface_as
 	fprintf(stream, "\tiFunction: 0x%x\n", desc->iFunction);
 }
 
+static void libusb_dumpFunctionalDescriptor(FILE *stream, functional_desc_t *desc)
+{
+	fprintf(stream, "CLASS SPECIFIC %s FUNCTIONAL DESCRIPTOR:\n", desc->bDescriptorType == DESC_CS_INTERFACE ? "INTERFACE" : "ENDPOINT");
+	fprintf(stream, "\tbFunctionLength: 0x%x\n", desc->bFunctionLength);
+	fprintf(stream, "\tbDescriptorType: 0x%x\n", desc->bDescriptorType);
+	fprintf(stream, "\tbDescriptorSubtype: 0x%x\n", desc->bDescriptorSubtype);
+}
 
 static void libusb_dumpDescriptor(FILE *stream, struct desc_header *desc)
 {
@@ -308,6 +315,11 @@ static void libusb_dumpDescriptor(FILE *stream, struct desc_header *desc)
 
 	case DESC_INTERFACE_ASSOCIATION:
 		libusb_dumpInterfaceAssociationDescriptor(stream, (void *)desc);
+		break;
+
+	case DESC_CS_INTERFACE:
+	case DESC_CS_ENDPOINT:
+		libusb_dumpFunctionalDescriptor(stream, (void *)desc);
 		break;
 
 	default:
