@@ -102,6 +102,7 @@ static struct {
 	unsigned port;
 
 	handle_t port_lock, port_cond;
+	handle_t common_lock;
 } usbd_common;
 
 
@@ -180,7 +181,9 @@ void usb_deleteQueue(usb_queue_t *queue)
 {
 	FUN_TRACE;
 	ehci_unlinkQh(queue->prev->qh, queue->qh, queue->next->qh);
+	mutexLock(usbd_common.common_lock);
 	LIST_REMOVE(&usbd_common.queues, queue);
+	mutexUnlock(usbd_common.common_lock);
 	usb_deleteUnlinkedQueue(queue);
 }
 
@@ -189,7 +192,9 @@ void usb_linkAsync(usb_queue_t *queue)
 {
 	FUN_TRACE;
 
+	mutexLock(usbd_common.common_lock);
 	LIST_ADD(&usbd_common.queues, queue);
+	mutexUnlock(usbd_common.common_lock);
 
 	if (queue == queue->next) {
 		ehci_linkQh(queue->qh, queue->qh);
@@ -201,15 +206,18 @@ void usb_linkAsync(usb_queue_t *queue)
 }
 
 
-int usb_wait(usb_device_t *dev, int timeout)
+int usb_wait(usb_queue_t *queue, int timeout)
 {
-	int err;
+	int err = EOK;
 
-	mutexLock(dev->lock);
-	if ((err = condWait(dev->cond, dev->lock, timeout)) < 0) {
-		TRACE("wait error %d", err);
+	mutexLock(queue->device->lock);
+	while (!ehci_qhFinished(queue->qh)) {
+		if ((err = condWait(queue->device->cond, queue->device->lock, timeout)) < 0) {
+			TRACE("wait error %d", err);
+			break;
+		}
 	}
-	mutexUnlock(dev->lock);
+	mutexUnlock(queue->device->lock);
 
 	return err;
 }
@@ -257,7 +265,7 @@ int usb_control(usb_device_t *dev, usb_endpoint_t *ep, setup_packet_t *packet, v
 	usb_linkTransfers(queue);
 	usb_linkAsync(queue);
 
-	err = usb_wait(dev, USB_TIMEOUT);
+	err = usb_wait(queue, USB_TIMEOUT);
 
 	usb_deleteQueue(queue);
 
@@ -391,7 +399,7 @@ int usb_bulk(usb_device_t *dev, usb_endpoint_t *ep, int token, void *buffer, siz
 	usb_linkTransfers(queue);
 	usb_linkAsync(queue);
 
-	err = usb_wait(dev, USB_TIMEOUT);
+	err = usb_wait(queue, USB_TIMEOUT);
 	usb_deleteQueue(queue);
 	return err;
 }
@@ -756,16 +764,22 @@ void usb_eventCallback(int port_change)
 	FUN_TRACE;
 	usb_queue_t *queue;
 
+	mutexLock(usbd_common.common_lock);
 	if ((queue = usbd_common.queues) != NULL) {
 		do {
-			if (ehci_qhFinished(queue->qh))
+			if (ehci_qhFinished(queue->qh)) {
+				TRACE("queue finished");
 				condSignal(queue->device->cond);
+			}
 		}
 		while (queue != usbd_common.queues);
 	}
+	mutexUnlock(usbd_common.common_lock);
 
-	if (port_change)
+	if (port_change) {
+		TRACE("port change");
 		condSignal(usbd_common.port_cond);
+	}
 }
 
 
@@ -943,10 +957,13 @@ void msgthr(void *arg)
 
 int main(int argc, char **argv)
 {
+	//asm volatile ("1: b 1b");
+
 	FUN_TRACE;
 	oid_t oid;
 	portCreate(&usbd_common.port);
 
+	mutexCreate(&usbd_common.common_lock);
 	mutexCreate(&usbd_common.port_lock);
 	condCreate(&usbd_common.port_cond);
 
