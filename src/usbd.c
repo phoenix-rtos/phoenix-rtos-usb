@@ -562,7 +562,7 @@ usb_driver_t *usb_findDriver(usb_device_t *device)
 }
 
 
-void usb_connectDriver(usb_driver_t *driver, usb_device_t *device, configuration_desc_t *configuration)
+int usb_connectDriver(usb_driver_t *driver, usb_device_t *device, configuration_desc_t *configuration)
 {
 	FUN_TRACE;
 
@@ -579,14 +579,7 @@ void usb_connectDriver(usb_driver_t *driver, usb_device_t *device, configuration
 	insertion->device_id = idtree_id(&device->linkage);
 	memcpy(&insertion->descriptor, device->descriptor, sizeof(device_desc_t));
 
-	if (msgSend(driver->port, &msg) < 0) {
-		LIST_ADD(&driver->devices, device);
-		device->driver = driver;
-	}
-	else {
-		LIST_ADD(&usbd_common.orphan_devices, device);
-		device->driver = NULL;
-	}
+	return msgSend(driver->port, &msg);
 }
 
 
@@ -674,8 +667,14 @@ void usb_deviceAttach(void)
 		TRACE("got driver");
 		configuration = mmap(NULL, SIZE_PAGE, PROT_WRITE | PROT_READ, MAP_ANONYMOUS | MAP_UNCACHED, OID_NULL, 0);
 		usb_getConfiguration(dev, configuration, SIZE_PAGE);
-		usb_connectDriver(driver, dev, configuration);
-
+		if (usb_connectDriver(driver, dev, configuration) < 0) {
+			LIST_ADD(&usbd_common.orphan_devices, dev);
+			dev->driver = NULL;
+		}
+		else {
+			LIST_ADD(&driver->devices, dev);
+			dev->driver = driver;
+		}
 		munmap(configuration, SIZE_PAGE);
 	}
 	else {
