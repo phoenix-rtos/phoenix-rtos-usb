@@ -34,7 +34,7 @@
 
 
 #define FUN_TRACE fprintf(stderr, "usbd trace: %s\n", __PRETTY_FUNCTION__)
-#define TRACE(x, ...) fprintf(stderr, "usbd: " x "\n" __VA_ARGS__)
+#define TRACE(x, ...) fprintf(stderr, "usbd: " x "\n", ##__VA_ARGS__)
 
 typedef struct usb_request {
 	struct usb_request *next, *prev;
@@ -567,13 +567,15 @@ void usb_connectDriver(usb_driver_t *driver, usb_device_t *device, configuration
 	FUN_TRACE;
 
 	msg_t msg;
-	usb_insertion_t *insertion = (void *)msg.i.raw;
+	usb_event_t *event = (void *)msg.i.raw;
+	usb_insertion_t *insertion = &event->insertion;
 
 	memset(&msg, 0, sizeof(msg));
 	msg.type = mtDevCtl;
 	msg.i.data = configuration;
 	msg.i.size = configuration->wTotalLength;
 
+	event->type = usb_event_insertion;
 	insertion->device_id = idtree_id(&device->linkage);
 	memcpy(&insertion->descriptor, device->descriptor, sizeof(device_desc_t));
 
@@ -630,7 +632,7 @@ int usb_getConfiguration(usb_device_t *device, void *buffer, size_t bufsz)
 void usb_deviceAttach(void)
 {
 	FUN_TRACE;
-	// asm volatile ("1: b 1b");
+
 	usb_device_t *dev;
 	usb_endpoint_t *ep;
 	usb_driver_t *driver;
@@ -649,7 +651,6 @@ void usb_deviceAttach(void)
 	ep->max_packet_len = 64;
 
 	idtree_alloc(&dev->pipes, &ep->linkage);
-
 
 	TRACE("getting device descriptor");
 	usb_getDeviceDescriptor(dev, ep, ddesc);
