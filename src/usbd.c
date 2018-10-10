@@ -64,7 +64,7 @@ typedef struct usb_endpoint {
 
 typedef struct usb_device {
 	struct usb_device *next, *prev;
-	struct usb_driver_t *driver;
+	usb_driver_t *driver;
 	idnode_t linkage;
 
 	device_desc_t *descriptor;
@@ -577,10 +577,14 @@ void usb_connectDriver(usb_driver_t *driver, usb_device_t *device, configuration
 	insertion->device_id = idtree_id(&device->linkage);
 	memcpy(&insertion->descriptor, device->descriptor, sizeof(device_desc_t));
 
-	if (msgSend(driver->port, &msg) < 0)
+	if (msgSend(driver->port, &msg) < 0) {
 		LIST_ADD(&driver->devices, device);
-	else
+		device->driver = driver;
+	}
+	else {
 		LIST_ADD(&usbd_common.orphan_devices, device);
+		device->driver = NULL;
+	}
 }
 
 
@@ -689,7 +693,7 @@ void usb_deviceDetach(void)
 		idtree_remove(&usbd_common.devices, &device->linkage);
 
 		if (device->driver != NULL) {
-			//LIST_REMOVE(&device->driver->devices, &device);
+			LIST_REMOVE(&device->driver->devices, device);
 			device->driver = NULL;
 		}
 	}
@@ -747,6 +751,7 @@ int usb_connect(usb_connect_t *c, unsigned pid)
 	driver->filter = c->filter;
 	driver->pid = pid;
 	driver->requests = NULL;
+	driver->devices = NULL;
 
 	lib_rbInsert(&usbd_common.drivers, &driver->linkage);
 
@@ -757,17 +762,22 @@ int usb_connect(usb_connect_t *c, unsigned pid)
 			return -ENOMEM;
 
 		for (i = 0; i < 4; ++i) {
-			if ((device = usbd_common.orphan_devices) != NULL) {
-				do {
-					while (usb_driverMatch[i](driver, device)) {
-						usb_getConfiguration(device, configuration, SIZE_PAGE);
-						usb_connectDriver(driver, device, configuration);
-						device = device->next;
-						LIST_REMOVE(&usbd_common.orphan_devices, device->prev);
+			device = usbd_common.orphan_devices;
+			do {
+				while (device != NULL && usb_driverMatch[i](driver, device)) {
+					usb_getConfiguration(device, configuration, SIZE_PAGE);
+					usb_connectDriver(driver, device, configuration);
+
+					if (device == usbd_common.orphan_devices) {
+						LIST_REMOVE(&usbd_common.orphan_devices, device);
+						device = usbd_common.orphan_devices;
+					}
+					else {
+						LIST_REMOVE(&device, device);
 					}
 				}
-				while ((device = device->next) != usbd_common.orphan_devices);
 			}
+			while (device != NULL && (device = device->next) != usbd_common.orphan_devices);
 		}
 
 		munmap(configuration, SIZE_PAGE);
