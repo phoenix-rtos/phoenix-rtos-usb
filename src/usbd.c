@@ -643,6 +643,7 @@ void usb_deviceAttach(void)
 	ep->speed = high_speed;
 	ep->max_packet_len = 64;
 
+	idtree_init(&dev->pipes);
 	idtree_alloc(&dev->pipes, &ep->linkage);
 
 	TRACE("getting device descriptor");
