@@ -25,7 +25,7 @@
 
 #define USB_HANDLE "/dev/usb"
 
-#define LIBUSB_RUN 0x1
+#define LIBUSB_RUNNING 0x1
 #define LIBUSB_CONNECTED 0x2
 
 static struct {
@@ -47,7 +47,7 @@ void libusb_event_loop(void *arg)
 	unsigned int rid;
 
 	mutexLock(libusb_common.lock);
-	while (libusb_common.state & LIBUSB_RUN) {
+	while (libusb_common.state & LIBUSB_RUNNING) {
 		mutexUnlock(libusb_common.lock);
 
 		msgRecv(libusb_common.port, &msg, &rid);
@@ -59,7 +59,7 @@ void libusb_event_loop(void *arg)
 		}
 
 		if (libusb_common.event_cb != NULL)
-			libusb_common.event_cb((usb_event_t *)&msg.o.raw, msg.o.data, msg.o.size);
+			libusb_common.event_cb((usb_event_t *)&msg.i.raw, msg.i.data, msg.i.size);
 		mutexUnlock(libusb_common.lock);
 
 		msgRespond(libusb_common.port, &msg, rid);
@@ -91,7 +91,7 @@ int libusb_init(void)
 	if (ret)
 		return -1;
 
-	libusb_common.state |= LIBUSB_RUN;
+	libusb_common.state |= LIBUSB_RUNNING;
 
 	beginthread(libusb_event_loop, 4, event_loop_stack, 4096, NULL);
 
@@ -194,7 +194,7 @@ int libusb_exit(void)
 	mutexLock(libusb_common.lock);
 
 	libusb_common.event_cb = NULL;
-	libusb_common.state &= ~LIBUSB_RUN;
+	libusb_common.state &= ~LIBUSB_RUNNING;
 	mutexUnlock(libusb_common.lock);
 	
 	ret = msgSend(libusb_common.port, &msg);
@@ -210,4 +210,125 @@ int libusb_exit(void)
 	ret |= resourceDestroy(libusb_common.lock);
 	
 	return ret ? -1 : 0;
+}
+
+static void libusb_dumpDeviceDescriptor(FILE *stream, device_desc_t *descr)
+{
+	fprintf(stream, "DEVICE DESCRIPTOR:\n");
+	fprintf(stream, "\tbLength: 0x%x\n", descr->bLength);
+	fprintf(stream, "\tbDescriptorType: 0x%x\n", descr->bDescriptorType);
+	fprintf(stream, "\tbcdUSB: 0x%x\n", descr->bcdUSB);
+	fprintf(stream, "\tbDeviceClass: 0x%x\n", descr->bDeviceClass);
+	fprintf(stream, "\tbDeviceSubClass: 0x%x\n", descr->bDeviceSubClass);
+	fprintf(stream, "\tbDeviceProtocol: 0x%x\n", descr->bDeviceProtocol);
+	fprintf(stream, "\tbMaxPacketSize0: 0x%x\n", descr->bMaxPacketSize0);
+	fprintf(stream, "\tidVendor: 0x%x\n", descr->idVendor);
+	fprintf(stream, "\tidProduct: 0x%x\n", descr->idProduct);
+	fprintf(stream, "\tbcdDevice: 0x%x\n", descr->bcdDevice);
+	fprintf(stream, "\tiManufacturer: 0x%x\n", descr->iManufacturer);
+	fprintf(stream, "\tiProduct: 0x%x\n", descr->iProduct);
+	fprintf(stream, "\tiSerialNumber: 0x%x\n", descr->iSerialNumber);
+	fprintf(stream, "\tbNumConfigurations: 0x%x\n", descr->bNumConfigurations);
+}
+
+
+static void libusb_dumpConfigurationDescriptor(FILE *stream, configuration_desc_t *desc)
+{
+	fprintf(stream, "CONFIGURATION DESCRIPTOR:\n");
+	fprintf(stream, "\tbLength: 0x%x\n", desc->bLength);
+	fprintf(stream, "\tbDescriptorType: 0x%x\n", desc->bDescriptorType);
+	fprintf(stream, "\twTotalLength: 0x%x\n", desc->wTotalLength);
+	fprintf(stream, "\tbNumInterfaces: 0x%x\n", desc->bNumInterfaces);
+	fprintf(stream, "\tbConfigurationValue: 0x%x\n", desc->bConfigurationValue);
+	fprintf(stream, "\tiConfiguration: 0x%x\n", desc->iConfiguration);
+	fprintf(stream, "\tbmAttributes: 0x%x\n", desc->bmAttributes);
+	fprintf(stream, "\tbMaxPower: 0x%x\n", desc->bMaxPower);
+}
+
+
+static void libusb_dumpInterfaceDescriptor(FILE *stream, interface_desc_t *desc)
+{
+	fprintf(stream, "INTERFACE DESCRIPTOR:\n");
+	fprintf(stream, "\tbLength: 0x%x\n", desc->bLength);
+	fprintf(stream, "\tbDescriptorType: 0x%x\n", desc->bDescriptorType);
+	fprintf(stream, "\tbInterfaceNumber: 0x%x\n", desc->bInterfaceNumber);
+	fprintf(stream, "\tbAlternateSetting: 0x%x\n", desc->bAlternateSetting);
+	fprintf(stream, "\tbNumEndpoints: 0x%x\n", desc->bNumEndpoints);
+	fprintf(stream, "\tbInterfaceClass: 0x%x\n", desc->bInterfaceClass);
+	fprintf(stream, "\tbInterfaceSubClass: 0x%x\n", desc->bInterfaceSubClass);
+	fprintf(stream, "\tbInterfaceProtocol: 0x%x\n", desc->bInterfaceProtocol);
+	fprintf(stream, "\tiInterface: 0x%x\n", desc->iInterface);
+}
+
+
+static void libusb_dumpEndpointDescriptor(FILE *stream, endpoint_desc_t *desc)
+{
+	fprintf(stream, "ENDPOINT DESCRIPTOR:\n");
+	fprintf(stream, "\tbLength: 0x%x\n", desc->bLength);
+	fprintf(stream, "\tbDescriptorType: 0x%x\n", desc->bDescriptorType);
+	fprintf(stream, "\tbEndpointAddress: 0x%x\n", desc->bEndpointAddress);
+	fprintf(stream, "\tbmAttributes: 0x%x\n", desc->bmAttributes);
+	fprintf(stream, "\twMaxPacketSize: 0x%x\n", desc->wMaxPacketSize);
+	fprintf(stream, "\tbInterval: 0x%x\n", desc->bInterval);
+}
+
+
+static void libusb_dumpInterfaceAssociationDescriptor(FILE *stream, interface_association_desc_t *desc)
+{
+	fprintf(stream, "INTERFACE ASSOCIATION DESCRIPTOR:\n");
+	fprintf(stream, "\tbLength: 0x%x\n", desc->bLength);
+	fprintf(stream, "\tbDescriptorType: 0x%x\n", desc->bDescriptorType);
+	fprintf(stream, "\tbFirstInterfacce: 0x%x\n", desc->bFirstInterface);
+	fprintf(stream, "\tbInterfaceCount: 0x%x\n", desc->bInterfaceCount);
+	fprintf(stream, "\tbFunctionClass: 0x%x\n", desc->bFunctionClass);
+	fprintf(stream, "\tbFunctionSubClass: 0x%x\n", desc->bFunctionSubClass);
+	fprintf(stream, "\tbFunctionProtocol: 0x%x\n", desc->bFunctionProtocol);
+	fprintf(stream, "\tiFunction: 0x%x\n", desc->iFunction);
+}
+
+
+static void libusb_dumpDescriptor(FILE *stream, struct desc_header *desc)
+{
+	switch (desc->bDescriptorType) {
+	case DESC_CONFIG:
+		libusb_dumpConfigurationDescriptor(stream, (void *)desc);
+		break;
+
+	case DESC_DEVICE:
+		libusb_dumpDeviceDescriptor(stream, (void *)desc);
+		break;
+
+	case DESC_INTERFACE:
+		libusb_dumpInterfaceDescriptor(stream, (void *)desc);
+		break;
+
+	case DESC_ENDPOINT:
+		libusb_dumpEndpointDescriptor(stream, (void *)desc);
+		break;
+
+	case DESC_INTERFACE_ASSOCIATION:
+		libusb_dumpInterfaceAssociationDescriptor(stream, (void *)desc);
+		break;
+
+	default:
+		printf("UNRECOGNIZED DESCRIPTOR (0x%x)\n", desc->bDescriptorType);
+		break;
+	}
+}
+
+
+void libusb_dumpConfiguration(FILE *stream, configuration_desc_t *desc)
+{
+	int remaining_size = desc->wTotalLength;
+	struct desc_header *header = (void *)desc;
+
+	while (remaining_size > 0) {
+		libusb_dumpDescriptor(stream, header);
+
+		if (!header->bLength)
+			break;
+
+		remaining_size -= header->bLength;
+		header = (struct desc_header *)((char *)header + header->bLength);
+	}
 }

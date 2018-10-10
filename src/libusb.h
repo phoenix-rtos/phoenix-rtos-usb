@@ -40,4 +40,7 @@ int libusb_read(usb_urb_t *urb, void *data, size_t size);
 int libusb_exit(void);
 
 
+void libusb_dumpConfiguration(FILE *stream, configuration_desc_t *desc);
+
+
 #endif
