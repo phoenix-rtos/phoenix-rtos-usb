@@ -379,14 +379,14 @@ int usb_setInterface(usb_device_t *dev, usb_endpoint_t *ep, int alt, int index)
 }
 
 
-int usb_bulk(usb_device_t *dev, usb_endpoint_t *ep, int token, void *buffer, size_t size)
+int usb_stream(usb_device_t *dev, usb_endpoint_t *ep, int type, int token, void *buffer, size_t size)
 {
 	FUN_TRACE;
 
 	int err;
 	usb_queue_t *queue;
 
-	if ((queue = usb_allocQueue(dev, ep, transfer_bulk)) == NULL)
+	if ((queue = usb_allocQueue(dev, ep, type)) == NULL)
 		return -ENOMEM;
 
 	while (size) {
@@ -621,7 +621,7 @@ int usb_openPipe(usb_device_t *device, endpoint_desc_t *descriptor)
 	FUN_TRACE;
 
 	usb_endpoint_t *pipe = malloc(sizeof(usb_endpoint_t));
-	pipe->speed = high_speed;
+	pipe->speed = full_speed;
 
 	pipe->max_packet_len = descriptor->wMaxPacketSize;
 	pipe->number = descriptor->bEndpointAddress & 0xf;
@@ -634,7 +634,7 @@ int usb_getConfiguration(usb_device_t *device, void *buffer, size_t bufsz)
 	configuration_desc_t *conf = dma_alloc64();
 	usb_endpoint_t control_endpt = {
 		.number = 0,
-		.speed = high_speed,
+		.speed = full_speed,
 		.max_packet_len = 64,
 	};
 
@@ -670,7 +670,7 @@ void usb_deviceAttach(void)
 	ep = calloc(1, sizeof(usb_endpoint_t));
 
 	ep->number = 0;
-	ep->speed = high_speed;
+	ep->speed = full_speed;
 	ep->max_packet_len = 64;
 
 	idtree_init(&dev->pipes);
@@ -678,6 +678,7 @@ void usb_deviceAttach(void)
 
 	TRACE("getting device descriptor");
 	usb_getDeviceDescriptor(dev, ep, ddesc);
+	ehci_resetPort();
 
 	dev->descriptor = ddesc;
 	ep->max_packet_len = ddesc->bMaxPacketSize0;
@@ -888,15 +889,24 @@ int usb_urb(usb_urb_t *u, msg_t *msg)
 
 	case usb_transfer_bulk:
 		if (msg->i.size)
-			usb_bulk(device, endpoint, out_token, msg->i.data, msg->i.size);
+			usb_stream(device, endpoint, transfer_bulk, out_token, msg->i.data, msg->i.size);
 
 		if (msg->o.size)
-			usb_bulk(device, endpoint, in_token, msg->o.data, msg->o.size);
+			usb_stream(device, endpoint, transfer_bulk, in_token, msg->o.data, msg->o.size);
 
 		err = EOK;
 		break;
 
 	case usb_transfer_interrupt:
+		if (msg->i.size)
+			usb_stream(device, endpoint, transfer_interrupt, out_token, msg->i.data, msg->i.size);
+
+		if (msg->o.size)
+			usb_stream(device, endpoint, transfer_interrupt, in_token, msg->o.data, msg->o.size);
+
+		err = EOK;
+		break;
+
 	case usb_transfer_isochronous:
 	default:
 		err = -ENOSYS;
