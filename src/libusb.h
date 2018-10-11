@@ -18,6 +18,7 @@
 
 #include "usb.h"
 #include "usbd.h"
+#include "usb_cdc.h"
 
 typedef void (*libusb_event_cb)(usb_event_t *event, void *data, size_t size);
 

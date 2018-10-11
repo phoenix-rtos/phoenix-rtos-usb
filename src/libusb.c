@@ -80,7 +80,7 @@ int libusb_init(void)
 	oid_t oid;
 
 	while (lookup(USB_HANDLE, NULL, &oid) < 0)
-		sleep(1);
+		usleep(1000000);
 
 	libusb_common.usbd_port = oid.port;
 
@@ -148,7 +148,7 @@ int libusb_write(usb_urb_t *urb, void *data, size_t size)
 	int ret = 0;	
 
 	msg.type = mtDevCtl;	
-	usb_msg_t *usb_msg = (usb_msg_t *)&msg.i.raw;
+	usb_msg_t *usb_msg = (usb_msg_t *)msg.i.raw;
 	usb_msg->type = usb_msg_urb;
 
 	memcpy(&usb_msg->urb, urb, sizeof(usb_urb_t));
@@ -170,7 +170,7 @@ int libusb_read(usb_urb_t *urb, void *data, size_t size)
 	int ret = 0;
 
 	msg.type = mtDevCtl;	
-	usb_msg_t *usb_msg = (usb_msg_t *)&msg.i.raw;
+	usb_msg_t *usb_msg = (usb_msg_t *)msg.i.raw;
 	usb_msg->type = usb_msg_urb;
 
 	memcpy(&usb_msg->urb, urb, sizeof(usb_urb_t));
