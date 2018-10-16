@@ -19,6 +19,7 @@
 #include "usb.h"
 
 #define USB_CONNECT_WILDCARD ((unsigned)-1)
+#define USB_CONNECT_NONE ((unsigned)-2)
 
 
 typedef struct {
@@ -39,8 +40,11 @@ typedef struct {
 
 typedef struct {
 	enum { usb_transfer_control, usb_transfer_interrupt, usb_transfer_bulk, usb_transfer_isochronous } type;
+	enum { usb_transfer_in, usb_transfer_out } direction;
 	int device_id;
 	int pipe;
+	int transfer_size;
+	int async;
 	setup_packet_t setup;
 } usb_urb_t;
 
@@ -74,11 +78,17 @@ typedef struct {
 
 
 typedef struct {
-	enum { usb_event_insertion, usb_event_removal, usb_event_interrupt } type;
+	int transfer_id;
+} usb_completion_t;
+
+
+typedef struct {
+	enum { usb_event_insertion, usb_event_removal, usb_event_completion } type;
 
 	union {
 		usb_insertion_t insertion;
 		usb_removal_t removal;
+		usb_completion_t completion;
 	};
 } usb_event_t;
 

@@ -52,7 +52,7 @@
 #define DESC_CS_ENDPOINT 0x25
 
 
-#define USB_TIMEOUT 500000
+#define USB_TIMEOUT 5000000
 
 
 enum { pid_out = 0xe1, pid_in = 0x69, pid_setup = 0x2d };

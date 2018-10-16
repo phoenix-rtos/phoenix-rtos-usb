@@ -103,7 +103,7 @@ int libusb_connect(usb_device_id_t *deviceId, libusb_event_cb event_cb)
 {
 	msg_t msg = { 0 };
 
-	msg.type = mtDevCtl;	
+	msg.type = mtDevCtl;
 	usb_msg_t *usb_msg = (usb_msg_t *)&msg.i.raw;
 	usb_msg->type = usb_msg_connect;
 
@@ -128,7 +128,7 @@ int libusb_open(usb_open_t *open)
 	msg_t msg = { 0 };
 	int ret = 0;
 
-	msg.type = mtDevCtl;	
+	msg.type = mtDevCtl;
 	usb_msg_t *usb_msg = (usb_msg_t *)&msg.i.raw;
 	usb_msg->type = usb_msg_open;
 
@@ -145,14 +145,15 @@ int libusb_open(usb_open_t *open)
 int libusb_write(usb_urb_t *urb, void *data, size_t size)
 {
 	msg_t msg = { 0 };
-	int ret = 0;	
+	int ret = 0;
 
-	msg.type = mtDevCtl;	
+	msg.type = mtDevCtl;
 	usb_msg_t *usb_msg = (usb_msg_t *)msg.i.raw;
 	usb_msg->type = usb_msg_urb;
+	urb->transfer_size = size;
 
 	memcpy(&usb_msg->urb, urb, sizeof(usb_urb_t));
-	
+
 	msg.i.data = data;
 	msg.i.size = size;
 
@@ -169,12 +170,15 @@ int libusb_read(usb_urb_t *urb, void *data, size_t size)
 	msg_t msg = { 0 };
 	int ret = 0;
 
-	msg.type = mtDevCtl;	
+	msg.type = mtDevCtl;
 	usb_msg_t *usb_msg = (usb_msg_t *)msg.i.raw;
 	usb_msg->type = usb_msg_urb;
 
+	if (!urb->async)
+		urb->transfer_size = size;
+
 	memcpy(&usb_msg->urb, urb, sizeof(usb_urb_t));
-	
+
 	msg.o.data = data;
 	msg.o.size = size;
 
@@ -196,19 +200,19 @@ int libusb_exit(void)
 	libusb_common.event_cb = NULL;
 	libusb_common.state &= ~LIBUSB_RUNNING;
 	mutexUnlock(libusb_common.lock);
-	
+
 	ret = msgSend(libusb_common.port, &msg);
 	if (ret)
 		return -1;
 
 	mutexLock(libusb_common.lock);
-	while(libusb_common.state & LIBUSB_CONNECTED)	
+	while(libusb_common.state & LIBUSB_CONNECTED)
 		condWait(libusb_common.cond, libusb_common.lock, 0);
 	mutexUnlock(libusb_common.lock);
-	
+
 	ret |= resourceDestroy(libusb_common.cond);
 	ret |= resourceDestroy(libusb_common.lock);
-	
+
 	return ret ? -1 : 0;
 }
 
