@@ -619,7 +619,7 @@ int usb_openPipe(usb_device_t *device, endpoint_desc_t *descriptor)
 
 	usb_endpoint_t *pipe = malloc(sizeof(usb_endpoint_t));
 
-	pipe->max_packet_len = /*64; //*/descriptor->wMaxPacketSize;
+	pipe->max_packet_len = 64; //*/descriptor->wMaxPacketSize;
 	pipe->number = descriptor->bEndpointAddress & 0xf;
 	pipe->next = pipe->prev = NULL;
 	pipe->device = device;
