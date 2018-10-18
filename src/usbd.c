@@ -77,6 +77,7 @@ typedef struct usb_device {
 typedef struct usb_qtd_list {
 	struct usb_qtd_list *next, *prev;
 	struct qtd *qtd;
+	size_t size;
 } usb_qtd_list_t;
 
 
@@ -122,6 +123,8 @@ usb_qtd_list_t *usb_allocQtd(int token, char *buffer, size_t *size, int datax)
 
 	if ((element->qtd = ehci_allocQtd(token, buffer, size, datax)) == NULL)
 		return NULL;
+
+	element->size = element->qtd->bytes_to_transfer;
 
 	return element;
 }
@@ -375,7 +378,20 @@ void usb_eventCallback(int port_change)
 
 
 
+int usb_countBytes(usb_transfer_t *transfer)
+{
+	size_t transferred_bytes = 0;
+	usb_qtd_list_t *qtd;
 
+	qtd = transfer->qtds;
+
+	do {
+		transferred_bytes += qtd->size - qtd->qtd->bytes_to_transfer;
+		qtd = qtd->next;
+	} while (qtd != transfer->qtds);
+
+	return transferred_bytes;
+}
 
 
 void usb_signalDriver(usb_transfer_t *transfer)
@@ -396,7 +412,7 @@ void usb_signalDriver(usb_transfer_t *transfer)
 	event->completion.transfer_id = transfer->id;
 
 	if (transfer->direction == usb_transfer_in) {
-		msg.i.size = transfer->transfer_size;
+		msg.i.size = usb_countBytes(transfer);
 		msg.i.data = transfer->transfer_buffer;
 	}
 
@@ -603,7 +619,7 @@ int usb_openPipe(usb_device_t *device, endpoint_desc_t *descriptor)
 
 	usb_endpoint_t *pipe = malloc(sizeof(usb_endpoint_t));
 
-	pipe->max_packet_len = 64; //descriptor->wMaxPacketSize;
+	pipe->max_packet_len = /*64; //*/descriptor->wMaxPacketSize;
 	pipe->number = descriptor->bEndpointAddress & 0xf;
 	pipe->next = pipe->prev = NULL;
 	pipe->device = device;
