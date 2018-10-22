@@ -820,6 +820,7 @@ int usb_connect(usb_connect_t *c, unsigned pid)
 				while (device != NULL && usb_driverMatch[i](driver, device)) {
 					usb_getConfiguration(device, configuration, SIZE_PAGE);
 					usb_connectDriver(driver, device, configuration);
+					device->driver = driver;
 
 					if (device == usbd_common.orphan_devices) {
 						LIST_REMOVE(&usbd_common.orphan_devices, device);
