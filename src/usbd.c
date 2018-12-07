@@ -37,6 +37,8 @@
 #define TRACE(x, ...) //fprintf(stderr, "usbd: " x "\n", ##__VA_ARGS__)
 
 
+pid_t telit = 0;
+
 typedef struct {
 	rbnode_t linkage;
 	unsigned pid;
@@ -90,6 +92,7 @@ typedef struct usb_transfer {
 	unsigned id;
 	handle_t cond;
 	volatile int finished;
+	volatile int aborted;
 
 	void *transfer_buffer;
 	size_t transfer_size;
@@ -111,20 +114,22 @@ static struct {
 	unsigned port;
 
 	handle_t common_lock;
-	handle_t async_cond, port_cond;
+	handle_t async_cond, port_cond, reset_cond;
+
+	usb_device_t *reset_device;
 } usbd_common;
 
 
 usb_qtd_list_t *usb_allocQtd(int token, char *buffer, size_t *size, int datax)
 {
-	FUN_TRACE;
+	//FUN_TRACE;
 
 	usb_qtd_list_t *element = malloc(sizeof(usb_qtd_list_t));
 
 	if ((element->qtd = ehci_allocQtd(token, buffer, size, datax)) == NULL)
 		return NULL;
 
-	element->size = element->qtd->bytes_to_transfer;
+	element->size = ehci_qtdRemainingBytes(element->qtd);
 
 	return element;
 }
@@ -132,7 +137,7 @@ usb_qtd_list_t *usb_allocQtd(int token, char *buffer, size_t *size, int datax)
 
 void usb_addQtd(usb_transfer_t *transfer, int token, void *buffer, size_t *size, int datax)
 {
-	FUN_TRACE;
+	//FUN_TRACE;
 
 	usb_qtd_list_t *el = usb_allocQtd(token, buffer, size, datax);
 
@@ -143,7 +148,7 @@ void usb_addQtd(usb_transfer_t *transfer, int token, void *buffer, size_t *size,
 
 usb_transfer_t *usb_allocTransfer(usb_endpoint_t *endpoint, int direction, int transfer_type, void *buffer, size_t size, int async)
 {
-	FUN_TRACE;
+	//FUN_TRACE;
 
 	usb_transfer_t *result;
 
@@ -157,6 +162,7 @@ usb_transfer_t *usb_allocTransfer(usb_endpoint_t *endpoint, int direction, int t
 	result->transfer_type = transfer_type;
 	result->direction = direction;
 	result->finished = 0;
+	result->aborted = 0;
 
 	if (async)
 		result->cond = usbd_common.async_cond;
@@ -173,14 +179,15 @@ usb_transfer_t *usb_allocTransfer(usb_endpoint_t *endpoint, int direction, int t
 
 void usb_deleteTransfer(usb_transfer_t *transfer)
 {
-	FUN_TRACE;
+	//FUN_TRACE;
 
 	usb_qtd_list_t *element, *next;
 
 	if (transfer->setup != NULL)
 		dma_free64(transfer->setup);
 
-	ehci_dequeue(transfer->endpoint->qh, transfer->qtds->qtd, transfer->qtds->prev->qtd);
+	if (transfer->endpoint->qh != NULL)
+		ehci_dequeue(transfer->endpoint->qh, transfer->qtds->qtd, transfer->qtds->prev->qtd);
 
 	element = transfer->qtds;
 	do {
@@ -226,6 +233,9 @@ void usb_linkTransfer(usb_endpoint_t *endpoint, usb_transfer_t *transfer)
 
 int usb_finished(usb_transfer_t *transfer)
 {
+	if (transfer->aborted)
+		return 1;
+
 	usb_qtd_list_t *qtd = transfer->qtds;
 	int finished = ehci_qtdFinished(qtd->prev->qtd);
 	int error = 0;
@@ -238,7 +248,7 @@ int usb_finished(usb_transfer_t *transfer)
 	return error ? -1 : finished;
 }
 
-
+volatile int resetting = 0;
 int usb_handleUrb(usb_urb_t *urb, usb_driver_t *driver, usb_device_t *device, usb_endpoint_t *endpoint, void *buffer)
 {
 	FUN_TRACE;
@@ -276,8 +286,23 @@ int usb_handleUrb(usb_urb_t *urb, usb_driver_t *driver, usb_device_t *device, us
 
 	/* TODO; dont wait here */
 	if (!transfer->async) {
-		while (!transfer->finished)
+
+
+		if (resetting) {
+			// asm volatile("1:  b 1b");
+			// ehci_activate(endpoint->qh);
+			TRACE("WAIT");
+		}
+
+
+		while (!transfer->finished && !transfer->aborted)
 			condWait(transfer->cond, usbd_common.common_lock, 0);
+
+		if (resetting) {
+			//asm volatile("1:  b 1b");
+			//ehci_activate(endpoint->qh);
+			TRACE("END");
+		}
 
 		LIST_REMOVE(&usbd_common.active_transfers, transfer);
 		usb_deleteTransfer(transfer);
@@ -318,13 +343,14 @@ int usb_submitUrb(int pid, usb_urb_t *urb, void *inbuf, void *outbuf)
 
 	if (urb->transfer_size) {
 		buffer = mmap(NULL, (urb->transfer_size + SIZE_PAGE - 1) & ~(SIZE_PAGE - 1), PROT_WRITE | PROT_READ, MAP_ANONYMOUS | MAP_UNCACHED, OID_NULL, 0);
+
+		if (buffer == MAP_FAILED) {
+			TRACE("no mem");
+			return -ENOMEM;
+		}
+
 		if (inbuf != NULL)
 			memcpy(buffer, inbuf, urb->transfer_size);
-	}
-
-	if (buffer == MAP_FAILED) {
-		TRACE("no mem");
-		return -ENOMEM;
 	}
 
 	int err = usb_handleUrb(urb, driver, device, endpoint, buffer);
@@ -336,6 +362,62 @@ int usb_submitUrb(int pid, usb_urb_t *urb, void *inbuf, void *outbuf)
 		munmap(buffer, (urb->transfer_size + SIZE_PAGE - 1) & ~(SIZE_PAGE - 1));
 
 	return err;
+}
+
+
+int usb_setAddress(usb_device_t *dev, unsigned char address);
+void usb_signalDetach(usb_device_t *device);
+
+void usb_resetDevice(usb_device_t *device)
+{
+	FUN_TRACE;
+
+	usb_endpoint_t *ep;
+	ehci_unlinkQh(device->control_endpoint->qh);
+	device->control_endpoint->qh = NULL; /* FIXME: leak */
+
+	if ((ep = device->endpoints) != NULL) {
+		do {
+			if (ep->qh != NULL)
+				ehci_unlinkQh(ep->qh);
+			ep->qh = NULL; /* FIXME: leak */
+		}
+		while ((ep = ep->next) != device->endpoints);
+	}
+
+	usb_transfer_t *transfer;
+	if ((transfer = usbd_common.active_transfers) != NULL) {
+		do {
+			transfer->aborted = 1;
+			condSignal(transfer->cond);
+		}
+		while ((transfer = transfer->next) != usbd_common.active_transfers);
+	}
+
+	ehci_resetPort();
+
+	device->address = 0;
+	usb_setAddress(device, 1 + idtree_id(&device->linkage));
+	TRACE("reset: address is set");
+	device->address = 1 + idtree_id(&device->linkage);
+	ehci_qhSetAddress(device->control_endpoint->qh, device->address);
+
+	usb_signalDetach(device);
+}
+
+
+void usb_resetThread(void *arg)
+{
+	mutexLock(usbd_common.common_lock);
+
+	for (;;) {
+		condWait(usbd_common.reset_cond, usbd_common.common_lock, 0);
+
+		if (usbd_common.reset_device != NULL) {
+			usb_resetDevice(usbd_common.reset_device);
+			usbd_common.reset_device = NULL;
+		}
+	}
 }
 
 
@@ -353,6 +435,16 @@ void usb_eventCallback(int port_change)
 
 				if (transfer->async)
 					LIST_ADD_EX(&usbd_common.finished_transfers, transfer, finished_next, finished_prev);
+
+				if (error < 0) {
+					TRACE("err async%d", transfer->async);
+
+					resetting = 1;
+					usbd_common.reset_device = transfer->endpoint->device;
+					condSignal(usbd_common.reset_cond);
+
+					return;
+				}
 
 				condBroadcast(transfer->cond);
 			}
@@ -380,11 +472,34 @@ int usb_countBytes(usb_transfer_t *transfer)
 	qtd = transfer->qtds;
 
 	do {
-		transferred_bytes += qtd->size - qtd->qtd->bytes_to_transfer;
+		transferred_bytes += qtd->size - ehci_qtdRemainingBytes(qtd->qtd);
 		qtd = qtd->next;
 	} while (qtd != transfer->qtds);
 
 	return transferred_bytes;
+}
+
+
+void usb_signalDetach(usb_device_t *device)
+{
+	FUN_TRACE;
+
+	usb_driver_t *driver;
+	usb_event_t *event;
+	msg_t msg = { 0 };
+
+	if ((driver = device->driver) == NULL) {
+		TRACE("detach: no driver!");
+		return;
+	}
+
+	msg.type = mtDevCtl;
+
+	event = (void *)msg.i.raw;
+	event->type = usb_event_removal;
+	event->removal.device_id = idtree_id(&device->linkage);
+
+	msgSend(device->driver->port, &msg);
 }
 
 
@@ -620,6 +735,9 @@ int usb_openPipe(usb_device_t *device, endpoint_desc_t *descriptor)
 	pipe->next = pipe->prev = NULL;
 	pipe->device = device;
 	pipe->qh = NULL;
+
+	LIST_ADD(&device->endpoints, pipe);
+
 	return idtree_alloc(&device->pipes, &pipe->linkage);
 }
 
@@ -697,12 +815,11 @@ void usb_deviceAttach(void)
 	usb_dumpDeviceDescriptor(stderr, ddesc);
 
 	TRACE("setting address");
-	usb_setAddress(dev, 1);
-	dev->address = 1;
-
-	dev->control_endpoint->qh->device_addr = 1; /* fixme. */
-
 	idtree_alloc(&usbd_common.devices, &dev->linkage);
+
+	usb_setAddress(dev, 1 + idtree_id(&dev->linkage));
+	dev->address = 1 + idtree_id(&dev->linkage);
+	ehci_qhSetAddress(dev->control_endpoint->qh, dev->address);
 
 	if ((driver = usb_findDriver(dev)) != NULL) {
 		TRACE("got driver");
@@ -734,6 +851,17 @@ void usb_deviceDetach(void)
 		idtree_remove(&usbd_common.devices, &device->linkage);
 
 		/* TODO: remove active transfers */
+
+		ehci_unlinkQh(device->control_endpoint->qh);
+
+		usb_endpoint_t *ep = device->endpoints;
+		if (ep != NULL) {
+			do
+				if (ep->qh != NULL)
+					ehci_unlinkQh(ep->qh);
+			while ((ep = ep->next) != device->endpoints);
+		}
+
 
 		if (device->driver != NULL) {
 			LIST_REMOVE(&device->driver->devices, device);
@@ -834,6 +962,8 @@ int usb_connect(usb_connect_t *c, unsigned pid)
 		munmap(configuration, SIZE_PAGE);
 	}
 
+	telit = pid;
+
 	return EOK;
 }
 
@@ -865,25 +995,36 @@ void msgthr(void *arg)
 			continue;
 
 		TRACE("received");
+
 		mutexLock(usbd_common.common_lock);
 		TRACE("got lock");
 
 		if (msg.type == mtDevCtl) {
 			umsg = (void *)msg.i.raw;
 
-			switch (umsg->type) {
-			case usb_msg_connect:
-				msg.o.io.err = usb_connect(&umsg->connect, msg.pid);
-				break;
-			case usb_msg_urb:
-				msg.o.io.err = usb_submitUrb(msg.pid, &umsg->urb, msg.i.data, msg.o.data);
-				break;
-			case usb_msg_open:
-				msg.o.io.err = usb_open(&umsg->open, &msg);
-				break;
+			if (umsg->type == usb_msg_clear) {
+				resetting = 0;
+			}
+			else if (!resetting) {
+				switch (umsg->type) {
+				case usb_msg_connect:
+					msg.o.io.err = usb_connect(&umsg->connect, msg.pid);
+					break;
+				case usb_msg_urb:
+					msg.o.io.err = usb_submitUrb(msg.pid, &umsg->urb, msg.i.data, msg.o.data);
+					break;
+				case usb_msg_open:
+					msg.o.io.err = usb_open(&umsg->open, &msg);
+				default:
+					break;
+				}
+			}
+			else {
+				msg.o.io.err = -EINVAL;
 			}
 		}
 		else {
+			TRACE("msgthr: inval");
 			msg.o.io.err = -EINVAL;
 		}
 		mutexUnlock(usbd_common.common_lock);
@@ -918,10 +1059,12 @@ int main(int argc, char **argv)
 	mutexCreate(&usbd_common.common_lock);
 	condCreate(&usbd_common.port_cond);
 	condCreate(&usbd_common.async_cond);
+	condCreate(&usbd_common.reset_cond);
 
 	usbd_common.active_transfers = NULL;
 	usbd_common.finished_transfers = NULL;
 	usbd_common.orphan_devices = NULL;
+	usbd_common.reset_device = NULL;
 	lib_rbInit(&usbd_common.drivers, usb_driver_cmp, NULL);
 	idtree_init(&usbd_common.devices);
 
@@ -933,6 +1076,7 @@ int main(int argc, char **argv)
 
 	beginthread(usb_portthr, 4, malloc(0x4000), 0x4000, NULL);
 	beginthread(usb_signalThread, 4, malloc(0x4000), 0x4000, NULL);
+	beginthread(usb_resetThread, 4, malloc(0x4000), 0x4000, NULL);
 
 	beginthread(msgthr, 4, malloc(0x4000), 0x4000, (void *)usbd_common.port);
 	beginthread(msgthr, 4, malloc(0x4000), 0x4000, (void *)usbd_common.port);

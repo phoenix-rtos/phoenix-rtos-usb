@@ -56,7 +56,7 @@ typedef struct {
 
 
 typedef struct {
-	enum { usb_msg_connect, usb_msg_urb, usb_msg_open } type;
+	enum { usb_msg_connect, usb_msg_urb, usb_msg_open, usb_msg_clear } type;
 
 	union {
 		usb_connect_t connect;

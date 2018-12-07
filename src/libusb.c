@@ -142,6 +142,25 @@ int libusb_open(usb_open_t *open)
 }
 
 
+int libusb_open_(int device, endpoint_desc_t endpoint)
+{
+	msg_t msg = { 0 };
+	int ret = 0;
+
+	msg.type = mtDevCtl;
+	usb_msg_t *usb_msg = (usb_msg_t *)&msg.i.raw;
+	usb_msg->type = usb_msg_open;
+	usb_msg->open.device_id = device;
+	usb_msg->open.endpoint = endpoint;
+
+	if ((ret = msgSend(libusb_common.usbd_port, &msg)))
+		return ret;
+
+	return msg.o.io.err;
+}
+
+
+
 int libusb_write(usb_urb_t *urb, void *data, size_t size)
 {
 	msg_t msg = { 0 };
@@ -151,6 +170,7 @@ int libusb_write(usb_urb_t *urb, void *data, size_t size)
 	usb_msg_t *usb_msg = (usb_msg_t *)msg.i.raw;
 	usb_msg->type = usb_msg_urb;
 	urb->transfer_size = size;
+	urb->direction = usb_transfer_out;
 
 	memcpy(&usb_msg->urb, urb, sizeof(usb_urb_t));
 
@@ -173,6 +193,7 @@ int libusb_read(usb_urb_t *urb, void *data, size_t size)
 	msg.type = mtDevCtl;
 	usb_msg_t *usb_msg = (usb_msg_t *)msg.i.raw;
 	usb_msg->type = usb_msg_urb;
+	urb->direction = usb_transfer_in;
 
 	if (!urb->async)
 		urb->transfer_size = size;
@@ -181,6 +202,26 @@ int libusb_read(usb_urb_t *urb, void *data, size_t size)
 
 	msg.o.data = data;
 	msg.o.size = size;
+
+	ret = msgSend(libusb_common.usbd_port, &msg);
+	if (ret)
+		return ret;
+
+	return msg.o.io.err;
+}
+
+
+int libusb_clear()
+{
+	msg_t msg = { 0 };
+	int ret = 0;
+
+	msg.type = mtDevCtl;
+	usb_msg_t *usb_msg = (usb_msg_t *)msg.i.raw;
+	usb_msg->type = usb_msg_clear;
+
+	msg.i.data = NULL;
+	msg.i.size = 0;
 
 	ret = msgSend(libusb_common.usbd_port, &msg);
 	if (ret)

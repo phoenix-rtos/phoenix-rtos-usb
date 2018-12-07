@@ -38,6 +38,9 @@ int libusb_write(usb_urb_t *urb, void *data, size_t size);
 int libusb_read(usb_urb_t *urb, void *data, size_t size);
 
 
+int libusb_clear(void);
+
+
 int libusb_exit(void);
 
 
