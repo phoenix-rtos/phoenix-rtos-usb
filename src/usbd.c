@@ -241,7 +241,7 @@ int usb_finished(usb_transfer_t *transfer)
 	int error = 0;
 
 	do {
-		error |= ehci_qtdError(qtd->qtd);
+		error |= ehci_qtdError(qtd->qtd) | ehci_qtdBabble(qtd->qtd);
 		qtd = qtd->next;
 	} while (qtd != transfer->qtds);
 
@@ -355,7 +355,7 @@ int usb_submitUrb(int pid, usb_urb_t *urb, void *inbuf, void *outbuf)
 
 	int err = usb_handleUrb(urb, driver, device, endpoint, buffer);
 
-	if (outbuf != NULL && urb->direction == usb_transfer_out)
+	if (outbuf != NULL && urb->direction == usb_transfer_in)
 		memcpy(outbuf, buffer, urb->transfer_size);
 
 	if (buffer != NULL && !urb->async)
@@ -436,6 +436,7 @@ void usb_eventCallback(int port_change)
 				if (transfer->async)
 					LIST_ADD_EX(&usbd_common.finished_transfers, transfer, finished_next, finished_prev);
 
+#if 1
 				if (error < 0) {
 					TRACE("err async%d", transfer->async);
 
@@ -445,7 +446,7 @@ void usb_eventCallback(int port_change)
 
 					return;
 				}
-
+#endif
 				condBroadcast(transfer->cond);
 			}
 			transfer = transfer->next;
@@ -460,8 +461,6 @@ void usb_eventCallback(int port_change)
 
 	TRACE("callback out");
 }
-
-
 
 
 int usb_countBytes(usb_transfer_t *transfer)
@@ -521,6 +520,7 @@ void usb_signalDriver(usb_transfer_t *transfer)
 	event = (void *)msg.i.raw;
 	event->type = usb_event_completion;
 	event->completion.transfer_id = transfer->id;
+	event->completion.pipe = idtree_id(&transfer->endpoint->linkage);
 
 	if (transfer->direction == usb_transfer_in) {
 		msg.i.size = usb_countBytes(transfer);
@@ -549,12 +549,6 @@ void usb_signalThread(void *arg)
 		usb_deleteTransfer(transfer);
 	}
 }
-
-
-
-
-
-
 
 
 int usb_control(usb_device_t *device, int direction, setup_packet_t *setup, void *buffer, int size) {
@@ -1078,6 +1072,7 @@ int main(int argc, char **argv)
 	beginthread(usb_signalThread, 4, malloc(0x4000), 0x4000, NULL);
 	beginthread(usb_resetThread, 4, malloc(0x4000), 0x4000, NULL);
 
+	beginthread(msgthr, 4, malloc(0x4000), 0x4000, (void *)usbd_common.port);
 	beginthread(msgthr, 4, malloc(0x4000), 0x4000, (void *)usbd_common.port);
 	beginthread(msgthr, 4, malloc(0x4000), 0x4000, (void *)usbd_common.port);
 	msgthr((void *)usbd_common.port);

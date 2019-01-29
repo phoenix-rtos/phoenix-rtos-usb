@@ -9,9 +9,9 @@
 SIL ?= @
 MAKEFLAGS += --no-print-directory
 
-TARGET ?= ia32-qemu
+#TARGET ?= ia32-qemu
 #TARGET ?= armv7-stm32
-#TARGET ?= arm-imx
+TARGET ?= arm-imx6ull
 
 TOPDIR := $(CURDIR)
 BUILD_PREFIX ?= ../build/$(TARGET)

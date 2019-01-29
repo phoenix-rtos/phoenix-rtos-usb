@@ -79,6 +79,7 @@ typedef struct {
 
 typedef struct {
 	int transfer_id;
+	int pipe;
 } usb_completion_t;
 
 
