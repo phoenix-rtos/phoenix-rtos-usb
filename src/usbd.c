@@ -23,6 +23,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
+#include <syslog.h>
 
 #include <posix/idtree.h>
 #include <posix/utils.h>
@@ -35,7 +36,7 @@
 
 #define FUN_TRACE  //fprintf(stderr, "usbd trace: %s\n", __PRETTY_FUNCTION__)
 #define TRACE(x, ...) //fprintf(stderr, "usbd: " x "\n", ##__VA_ARGS__)
-#define TRACE_FAIL(x, ...) fprintf(stderr, "usbd error: " x "\n", ##__VA_ARGS__)
+#define TRACE_FAIL(x, ...) syslog(LOG_WARNING, x, ##__VA_ARGS__)
 
 
 pid_t telit = 0;
@@ -242,7 +243,16 @@ int usb_finished(usb_transfer_t *transfer)
 	int error = 0;
 
 	do {
-		error |= ehci_qtdError(qtd->qtd) | ehci_qtdBabble(qtd->qtd);
+		if (ehci_qtdError(qtd->qtd)) {
+			TRACE_FAIL("transaction error");
+			error++;
+		}
+
+		if (ehci_qtdBabble(qtd->qtd)) {
+			TRACE_FAIL("babble");
+			error++;
+		}
+
 		qtd = qtd->next;
 	} while (qtd != transfer->qtds);
 
@@ -1051,6 +1061,8 @@ int main(int argc, char **argv)
 	condCreate(&usbd_common.port_cond);
 	condCreate(&usbd_common.async_cond);
 	condCreate(&usbd_common.reset_cond);
+
+	openlog("usbd", LOG_CONS, LOG_DAEMON);
 
 	usbd_common.active_transfers = NULL;
 	usbd_common.finished_transfers = NULL;
