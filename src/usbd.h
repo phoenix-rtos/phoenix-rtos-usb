@@ -56,39 +56,41 @@ typedef struct {
 
 
 typedef struct {
-	enum { usb_msg_connect, usb_msg_urb, usb_msg_open, usb_msg_clear } type;
+	int device_id;
+} usb_reset_t;
+
+
+typedef struct {
+	enum { usb_msg_connect, usb_msg_urb, usb_msg_open, usb_msg_reset } type;
 
 	union {
 		usb_connect_t connect;
 		usb_urb_t urb;
 		usb_open_t open;
+		usb_reset_t reset;
 	};
 } usb_msg_t;
 
 
 typedef struct {
-	int device_id;
 	device_desc_t descriptor;
 } usb_insertion_t;
 
 
 typedef struct {
-	int device_id;
-} usb_removal_t;
-
-
-typedef struct {
 	int transfer_id;
 	int pipe;
+	int error;
 } usb_completion_t;
 
 
 typedef struct {
-	enum { usb_event_insertion, usb_event_removal, usb_event_completion } type;
+	enum { usb_event_insertion, usb_event_removal, usb_event_completion, usb_event_reset } type;
+
+	int device_id;
 
 	union {
 		usb_insertion_t insertion;
-		usb_removal_t removal;
 		usb_completion_t completion;
 	};
 } usb_event_t;

@@ -60,11 +60,8 @@ void libusb_event_loop(void *arg)
 
 		if (libusb_common.event_cb != NULL)
 			libusb_common.event_cb((usb_event_t *)&msg.i.raw, msg.i.data, msg.i.size);
-		mutexUnlock(libusb_common.lock);
 
 		msgRespond(libusb_common.port, &msg, rid);
-
-		mutexLock(libusb_common.lock);
 	}
 	libusb_common.state &= ~LIBUSB_CONNECTED;
 	mutexUnlock(libusb_common.lock);
@@ -113,11 +110,6 @@ int libusb_connect(usb_device_id_t *deviceId, libusb_event_cb event_cb)
 	libusb_common.event_cb = event_cb;
 
 	msgSend(libusb_common.usbd_port, &msg);
-
-	mutexLock(libusb_common.lock);
-	while (!(libusb_common.state & LIBUSB_CONNECTED))
-		condWait(libusb_common.cond, libusb_common.lock, 0);
-	mutexUnlock(libusb_common.lock);
 
 	return 0;
 }
@@ -211,19 +203,18 @@ int libusb_read(usb_urb_t *urb, void *data, size_t size)
 }
 
 
-int libusb_clear()
+int libusb_reset(int deviceId)
 {
 	msg_t msg = { 0 };
 	int ret = 0;
 
 	msg.type = mtDevCtl;
 	usb_msg_t *usb_msg = (usb_msg_t *)msg.i.raw;
-	usb_msg->type = usb_msg_clear;
-
-	msg.i.data = NULL;
-	msg.i.size = 0;
+	usb_msg->type = usb_msg_reset;
+	usb_msg->reset.device_id = deviceId;
 
 	ret = msgSend(libusb_common.usbd_port, &msg);
+
 	if (ret)
 		return ret;
 
