@@ -1,5 +1,5 @@
 #
-# Makefile for Phoenix-RTOS 3 usb
+# Makefile for phoenix-rtos-usb
 #
 # ARM (Cortex-A5/A7/A9) options
 #
@@ -8,7 +8,7 @@
 
 CROSS ?= arm-phoenix-
 
-SUBDIRS = src
+SUBDIRS = tty/libtty tty/imx6ull-uart storage/imx6ull-flash gpio/imx6ull-gpio utils/imx6ull-nandtool dma/imx6ull-sdma spi/imx6ull-ecspi utils/imx6ull-otp usb/imx6ull-ehci usb/telit-le910
 
 MKDEP = $(CROSS)gcc -MM
 MKDEPFLAGS = $(CFLAGS)
@@ -17,7 +17,7 @@ CC = $(CROSS)gcc
 
 CFLAGS += -Os -Wall -Wstrict-prototypes -g\
 	-mcpu=cortex-a7 -mtune=cortex-a7 -mfpu=neon-vfpv4 -mfloat-abi=hard -mthumb\
-	-fomit-frame-pointer -ffreestanding -mno-unaligned-access
+	-fomit-frame-pointer -mno-unaligned-access
 
 CFLAGS += -fdata-sections -ffunction-sections
 
