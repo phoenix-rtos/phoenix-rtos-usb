@@ -16,6 +16,7 @@
 
 #define REQUEST_DIR_HOST2DEV  (0 << 7)
 #define REQUEST_DIR_DEV2HOST  (1 << 7)
+#define REQUEST_DIR_MASK      (1 << 7)
 
 #define REQUEST_TYPE_STANDARD  (0 << 5)
 #define REQUEST_TYPE_CLASS     (1 << 5)
@@ -46,6 +47,9 @@
 #define DESC_INTERFACE 4
 #define DESC_ENDPOINT 5
 #define DESC_INTERFACE_ASSOCIATION 11
+
+/* Endpoint feature */
+#define ENDPOINT_HALT 0
 
 /* class specific desctriptors */
 #define DESC_CS_INTERFACE 0x24

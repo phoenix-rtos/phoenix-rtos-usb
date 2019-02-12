@@ -23,6 +23,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
+#include <syslog.h>
 
 #include <posix/idtree.h>
 #include <posix/utils.h>
@@ -35,6 +36,7 @@
 
 #define FUN_TRACE  //fprintf(stderr, "usbd trace: %s\n", __PRETTY_FUNCTION__)
 #define TRACE(x, ...) //fprintf(stderr, "usbd: " x "\n", ##__VA_ARGS__)
+#define TRACE_FAIL(x, ...) syslog(LOG_WARNING, x, ##__VA_ARGS__)
 
 
 pid_t telit = 0;
@@ -241,14 +243,23 @@ int usb_finished(usb_transfer_t *transfer)
 	int error = 0;
 
 	do {
-		error |= ehci_qtdError(qtd->qtd);
+		if (ehci_qtdError(qtd->qtd)) {
+			TRACE_FAIL("transaction error");
+			error++;
+		}
+
+		if (ehci_qtdBabble(qtd->qtd)) {
+			TRACE_FAIL("babble");
+			error++;
+		}
+
 		qtd = qtd->next;
 	} while (qtd != transfer->qtds);
 
 	return error ? -1 : finished;
 }
 
-volatile int resetting = 0;
+
 int usb_handleUrb(usb_urb_t *urb, usb_driver_t *driver, usb_device_t *device, usb_endpoint_t *endpoint, void *buffer)
 {
 	FUN_TRACE;
@@ -286,26 +297,15 @@ int usb_handleUrb(usb_urb_t *urb, usb_driver_t *driver, usb_device_t *device, us
 
 	/* TODO; dont wait here */
 	if (!transfer->async) {
-
-
-		if (resetting) {
-			// asm volatile("1:  b 1b");
-			// ehci_activate(endpoint->qh);
-			TRACE("WAIT");
-		}
-
-
 		while (!transfer->finished && !transfer->aborted)
 			condWait(transfer->cond, usbd_common.common_lock, 0);
 
-		if (resetting) {
-			//asm volatile("1:  b 1b");
-			//ehci_activate(endpoint->qh);
-			TRACE("END");
-		}
-
 		LIST_REMOVE(&usbd_common.active_transfers, transfer);
 		usb_deleteTransfer(transfer);
+
+		if (transfer->aborted || transfer->finished < 0)
+			return -EIO;
+
 		return EOK;
 	}
 	else {
@@ -355,7 +355,7 @@ int usb_submitUrb(int pid, usb_urb_t *urb, void *inbuf, void *outbuf)
 
 	int err = usb_handleUrb(urb, driver, device, endpoint, buffer);
 
-	if (outbuf != NULL && urb->direction == usb_transfer_out)
+	if (outbuf != NULL && urb->direction == usb_transfer_in)
 		memcpy(outbuf, buffer, urb->transfer_size);
 
 	if (buffer != NULL && !urb->async)
@@ -366,7 +366,7 @@ int usb_submitUrb(int pid, usb_urb_t *urb, void *inbuf, void *outbuf)
 
 
 int usb_setAddress(usb_device_t *dev, unsigned char address);
-void usb_signalDetach(usb_device_t *device);
+
 
 void usb_resetDevice(usb_device_t *device)
 {
@@ -401,8 +401,6 @@ void usb_resetDevice(usb_device_t *device)
 	TRACE("reset: address is set");
 	device->address = 1 + idtree_id(&device->linkage);
 	ehci_qhSetAddress(device->control_endpoint->qh, device->address);
-
-	usb_signalDetach(device);
 }
 
 
@@ -429,22 +427,12 @@ void usb_eventCallback(int port_change)
 
 	if ((transfer = usbd_common.active_transfers) != NULL) {
 		do {
-			if ((error = usb_finished(transfer))) {
+			if (!transfer->finished && (error = usb_finished(transfer))) {
 				TRACE("transfer finished %x", transfer->id);
 				transfer->finished = error;
 
 				if (transfer->async)
 					LIST_ADD_EX(&usbd_common.finished_transfers, transfer, finished_next, finished_prev);
-
-				if (error < 0) {
-					TRACE("err async%d", transfer->async);
-
-					resetting = 1;
-					usbd_common.reset_device = transfer->endpoint->device;
-					condSignal(usbd_common.reset_cond);
-
-					return;
-				}
 
 				condBroadcast(transfer->cond);
 			}
@@ -460,8 +448,6 @@ void usb_eventCallback(int port_change)
 
 	TRACE("callback out");
 }
-
-
 
 
 int usb_countBytes(usb_transfer_t *transfer)
@@ -497,7 +483,7 @@ void usb_signalDetach(usb_device_t *device)
 
 	event = (void *)msg.i.raw;
 	event->type = usb_event_removal;
-	event->removal.device_id = idtree_id(&device->linkage);
+	event->device_id = idtree_id(&device->linkage);
 
 	msgSend(device->driver->port, &msg);
 }
@@ -521,13 +507,23 @@ void usb_signalDriver(usb_transfer_t *transfer)
 	event = (void *)msg.i.raw;
 	event->type = usb_event_completion;
 	event->completion.transfer_id = transfer->id;
+	event->completion.pipe = idtree_id(&transfer->endpoint->linkage);
+
+	if (transfer->aborted)
+		event->completion.error = 1;
+	else if (transfer->finished < 0)
+		event->completion.error = -EIO;
+	else
+		event->completion.error = EOK;
 
 	if (transfer->direction == usb_transfer_in) {
 		msg.i.size = usb_countBytes(transfer);
 		msg.i.data = transfer->transfer_buffer;
 	}
 
+	TRACE("signalling");
 	msgSend(transfer->endpoint->device->driver->port, &msg);
+	TRACE("signalling out");
 }
 
 
@@ -543,7 +539,10 @@ void usb_signalThread(void *arg)
 
 		LIST_REMOVE(&usbd_common.active_transfers, transfer);
 		LIST_REMOVE_EX(&usbd_common.finished_transfers, transfer, finished_next, finished_prev);
+
+		mutexUnlock(usbd_common.common_lock);
 		usb_signalDriver(transfer);
+		mutexLock(usbd_common.common_lock);
 
 		munmap(transfer->transfer_buffer, (transfer->transfer_size + SIZE_PAGE - 1) & ~(SIZE_PAGE - 1));
 		usb_deleteTransfer(transfer);
@@ -551,14 +550,8 @@ void usb_signalThread(void *arg)
 }
 
 
-
-
-
-
-
-
-int usb_control(usb_device_t *device, int direction, setup_packet_t *setup, void *buffer, int size) {
-
+int usb_control(usb_device_t *device, int direction, setup_packet_t *setup, void *buffer, int size)
+{
 	usb_urb_t urb = (usb_urb_t) {
 		.type = usb_transfer_control,
 		.direction = direction,
@@ -711,7 +704,7 @@ int usb_connectDriver(usb_driver_t *driver, usb_device_t *device, configuration_
 	msg.i.size = configuration->wTotalLength;
 
 	event->type = usb_event_insertion;
-	insertion->device_id = idtree_id(&device->linkage);
+	event->device_id = idtree_id(&device->linkage);
 	memcpy(&insertion->descriptor, device->descriptor, sizeof(device_desc_t));
 
 	return msgSend(driver->port, &msg);
@@ -780,7 +773,7 @@ void usb_dumpDeviceDescriptor(FILE *stream, device_desc_t *descr)
 }
 
 
-void usb_deviceAttach(void)
+int usb_deviceAttach(void)
 {
 	FUN_TRACE;
 
@@ -806,7 +799,15 @@ void usb_deviceAttach(void)
 	idtree_alloc(&dev->pipes, &ep->linkage);
 
 	TRACE("getting device descriptor");
-	usb_getDeviceDescriptor(dev, ddesc);
+	if (usb_getDeviceDescriptor(dev, ddesc) < 0) {
+		TRACE_FAIL("getting device descriptor");
+		free(dev);
+		free(ep);
+		dma_free64(ddesc);
+		ehci_resetPort();
+		return -EIO;
+	}
+
 	ehci_resetPort();
 
 	dev->descriptor = ddesc;
@@ -839,6 +840,8 @@ void usb_deviceAttach(void)
 		TRACE("no driver");
 		LIST_ADD(&usbd_common.orphan_devices, dev);
 	}
+
+	return EOK;
 }
 
 
@@ -848,6 +851,7 @@ void usb_deviceDetach(void)
 	usb_device_t *device = lib_treeof(usb_device_t, linkage, usbd_common.devices.root);
 
 	if (device != NULL) {
+		TRACE_FAIL("device detached");
 		idtree_remove(&usbd_common.devices, &device->linkage);
 
 		/* TODO: remove active transfers */
@@ -862,9 +866,9 @@ void usb_deviceDetach(void)
 			while ((ep = ep->next) != device->endpoints);
 		}
 
-
 		if (device->driver != NULL) {
 			LIST_REMOVE(&device->driver->devices, device);
+			usb_signalDetach(device);
 			device->driver = NULL;
 		}
 		else {
@@ -888,16 +892,16 @@ void usb_portthr(void *arg)
 
 		if (ehci_deviceAttached()) {
 			if (attached) {
-				TRACE("double attach");
+				TRACE_FAIL("double attach");
 			}
 			else {
-				usb_deviceAttach();
-				attached = 1;
+				if (usb_deviceAttach() == EOK)
+					attached = 1;
 			}
 		}
 		else {
 			if (!attached) {
-				TRACE("double detach");
+				TRACE_FAIL("double detach");
 			}
 			else {
 				usb_deviceDetach();
@@ -906,7 +910,6 @@ void usb_portthr(void *arg)
 		}
 	}
 }
-
 
 
 int usb_connect(usb_connect_t *c, unsigned pid)
@@ -947,13 +950,10 @@ int usb_connect(usb_connect_t *c, unsigned pid)
 					usb_connectDriver(driver, device, configuration);
 					device->driver = driver;
 
-					if (device == usbd_common.orphan_devices) {
-						LIST_REMOVE(&usbd_common.orphan_devices, device);
-						device = usbd_common.orphan_devices;
-					}
-					else {
-						LIST_REMOVE(&device, device);
-					}
+					LIST_REMOVE(&usbd_common.orphan_devices, device);
+					LIST_ADD(&driver->devices, device);
+
+					device = usbd_common.orphan_devices;
 				}
 			}
 			while (device != NULL && (device = device->next) != usbd_common.orphan_devices);
@@ -967,6 +967,17 @@ int usb_connect(usb_connect_t *c, unsigned pid)
 	return EOK;
 }
 
+
+int usb_submitReset(int device_id)
+{
+	usb_device_t *device;
+
+	if ((device = lib_treeof(usb_device_t, linkage, idtree_find(&usbd_common.devices, device_id))) == NULL)
+		return -EINVAL;
+
+	usb_resetDevice(device);
+	return EOK;
+}
 
 
 int usb_open(usb_open_t *o, msg_t *msg)
@@ -990,41 +1001,33 @@ void msgthr(void *arg)
 
 
 	for (;;) {
-		TRACE("receiving");
 		if (msgRecv(port, &msg, &rid) < 0)
 			continue;
 
-		TRACE("received");
-
 		mutexLock(usbd_common.common_lock);
-		TRACE("got lock");
-
 		if (msg.type == mtDevCtl) {
 			umsg = (void *)msg.i.raw;
 
-			if (umsg->type == usb_msg_clear) {
-				resetting = 0;
-			}
-			else if (!resetting) {
-				switch (umsg->type) {
-				case usb_msg_connect:
-					msg.o.io.err = usb_connect(&umsg->connect, msg.pid);
-					break;
-				case usb_msg_urb:
-					msg.o.io.err = usb_submitUrb(msg.pid, &umsg->urb, msg.i.data, msg.o.data);
-					break;
-				case usb_msg_open:
-					msg.o.io.err = usb_open(&umsg->open, &msg);
-				default:
-					break;
-				}
-			}
-			else {
-				msg.o.io.err = -EINVAL;
+			switch (umsg->type) {
+			case usb_msg_connect:
+				msg.o.io.err = usb_connect(&umsg->connect, msg.pid);
+				break;
+			case usb_msg_urb:
+				msg.o.io.err = usb_submitUrb(msg.pid, &umsg->urb, msg.i.data, msg.o.data);
+				break;
+			case usb_msg_open:
+				msg.o.io.err = usb_open(&umsg->open, &msg);
+				break;
+			case usb_msg_reset:
+				msg.o.io.err = usb_submitReset(umsg->reset.device_id);
+				break;
+			default:
+				TRACE_FAIL("unsupported usb_msg type");
+				break;
 			}
 		}
 		else {
-			TRACE("msgthr: inval");
+			TRACE_FAIL("unsupported msg type");
 			msg.o.io.err = -EINVAL;
 		}
 		mutexUnlock(usbd_common.common_lock);
@@ -1050,8 +1053,6 @@ int usb_driver_cmp(rbnode_t *n1, rbnode_t *n2)
 
 int main(int argc, char **argv)
 {
-	//asm volatile ("1: b 1b");
-
 	FUN_TRACE;
 	oid_t oid;
 	portCreate(&usbd_common.port);
@@ -1060,6 +1061,8 @@ int main(int argc, char **argv)
 	condCreate(&usbd_common.port_cond);
 	condCreate(&usbd_common.async_cond);
 	condCreate(&usbd_common.reset_cond);
+
+	openlog("usbd", LOG_CONS, LOG_DAEMON);
 
 	usbd_common.active_transfers = NULL;
 	usbd_common.finished_transfers = NULL;
@@ -1078,6 +1081,7 @@ int main(int argc, char **argv)
 	beginthread(usb_signalThread, 4, malloc(0x4000), 0x4000, NULL);
 	beginthread(usb_resetThread, 4, malloc(0x4000), 0x4000, NULL);
 
+	beginthread(msgthr, 4, malloc(0x4000), 0x4000, (void *)usbd_common.port);
 	beginthread(msgthr, 4, malloc(0x4000), 0x4000, (void *)usbd_common.port);
 	beginthread(msgthr, 4, malloc(0x4000), 0x4000, (void *)usbd_common.port);
 	msgthr((void *)usbd_common.port);
