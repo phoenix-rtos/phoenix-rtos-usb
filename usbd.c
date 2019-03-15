@@ -188,9 +188,6 @@ void usb_deleteTransfer(usb_transfer_t *transfer)
 	if (transfer->setup != NULL)
 		dma_free64(transfer->setup);
 
-	if (transfer->endpoint->qh != NULL)
-		ehci_dequeue(transfer->endpoint->qh, transfer->qtds->qtd, transfer->qtds->prev->qtd);
-
 	element = transfer->qtds;
 	do {
 		next = element->next;
@@ -434,6 +431,7 @@ void usb_eventCallback(int port_change)
 				if (transfer->async)
 					LIST_ADD_EX(&usbd_common.finished_transfers, transfer, finished_next, finished_prev);
 
+				ehci_continue(transfer->endpoint->qh, transfer->qtds->prev->qtd);
 				condBroadcast(transfer->cond);
 			}
 			transfer = transfer->next;
