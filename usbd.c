@@ -188,13 +188,14 @@ void usb_deleteTransfer(usb_transfer_t *transfer)
 	if (transfer->setup != NULL)
 		dma_free64(transfer->setup);
 
-	element = transfer->qtds;
-	do {
-		next = element->next;
-		ehci_freeQtd(element->qtd);
-		free(element);
+	if ((element = transfer->qtds) != NULL) {
+		do {
+			next = element->next;
+			ehci_freeQtd(element->qtd);
+			free(element);
+		}
+		while ((element = next) != transfer->qtds);
 	}
-	while ((element = next) != transfer->qtds);
 
 	if (!transfer->async)
 		resourceDestroy(transfer->cond);
@@ -288,6 +289,11 @@ int usb_handleUrb(usb_urb_t *urb, usb_driver_t *driver, usb_device_t *device, us
 
 	if (urb->type == usb_transfer_control) {
 		usb_addQtd(transfer, control_token, NULL, NULL, 1);
+	}
+
+	if (transfer->qtds == NULL) {
+		usb_deleteTransfer(transfer);
+		return EOK;
 	}
 
 	usb_linkTransfer(endpoint, transfer);
