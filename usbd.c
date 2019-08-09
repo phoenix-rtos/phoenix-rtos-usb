@@ -817,7 +817,9 @@ int usb_deviceAttach(void)
 	dev->descriptor = ddesc;
 	ep->max_packet_len = ddesc->bMaxPacketSize0;
 
-	usb_dumpDeviceDescriptor(stderr, ddesc);
+	if (0) {
+		usb_dumpDeviceDescriptor(stderr, ddesc);
+	}
 
 	TRACE("setting address");
 	idtree_alloc(&usbd_common.devices, &dev->linkage);
@@ -1088,6 +1090,8 @@ int main(int argc, char **argv)
 	beginthread(msgthr, 4, malloc(0x4000), 0x4000, (void *)usbd_common.port);
 	beginthread(msgthr, 4, malloc(0x4000), 0x4000, (void *)usbd_common.port);
 	beginthread(msgthr, 4, malloc(0x4000), 0x4000, (void *)usbd_common.port);
+
+	printf("usb: initialized\n");
 	msgthr((void *)usbd_common.port);
 	return 0;
 }
