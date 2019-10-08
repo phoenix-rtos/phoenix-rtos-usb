@@ -13,6 +13,7 @@
  * %LICENSE%
  */
 
+#include <stdint.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <unistd.h>
@@ -32,8 +33,8 @@ static struct {
 	libusb_event_cb event_cb;
 	handle_t cond;
 	handle_t lock;
-	u32 usbd_port;
-	u32 port;
+	uint32_t usbd_port;
+	uint32_t port;
 	int state;
 } libusb_common;
 
