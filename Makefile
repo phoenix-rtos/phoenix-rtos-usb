@@ -1,7 +1,7 @@
 #
 # Makefile for phoenix-rtos-usb
 #
-# Copyright 2019 Phoenix Systems
+# Copyright 2019, 2020 Phoenix Systems
 #
 # %LICENSE%
 #
@@ -20,7 +20,8 @@ BUILD_DIR ?= $(PREFIX_BUILD)/$(notdir $(TOPDIR))
 BUILD_DIR := $(abspath $(BUILD_DIR))
 
 # Compliation options for various architectures
-TARGET_FAMILY = $(firstword $(subst -, ,$(TARGET)-))
+TARGET_FAMILY ?= $(firstword $(subst -, ,$(TARGET)-))
+TARGET_SUBFAMILY ?= $(TARGET_FAMILY)-$(word 2,$(subst -, ,$(TARGET)-))
 include Makefile.$(TARGET_FAMILY)
 
 # build artifacts dir
@@ -67,33 +68,21 @@ $(PREFIX_PROG_STRIPPED)%: $(PREFIX_PROG)%
 	@mkdir -p $(@D)
 	@(printf "STR %-24s\n" "$(@F)")
 	$(SIL)$(STRIP) -o $@ $<
-	
-include Makefile.$(TARGET)
 
-all: $(PREFIX_PROG_STRIPPED)usb $(PREFIX_A)libusb.a $(addprefix $(PREFIX_H), libusb.h usb.h usbd.h usb_cdc.h)
-
-$(PREFIX_A)libusb.a: $(PREFIX_O)libusb.o
-	$(ARCH)
-	
-$(PREFIX_PROG)usb: $(PREFIX_O)usbd.o 
-	$(LINK) $(HCD_DRIVERS)
-	
-$(PREFIX_H)libusb.h: libusb.h
-	$(HEADER)
-	
-$(PREFIX_H)usb.h: usb.h
-	$(HEADER)
-	
-$(PREFIX_H)usbd.h: usbd.h
-	$(HEADER)
-
-$(PREFIX_H)usb_cdc.h: usb_cdc.h
-	$(HEADER)
-	
 .PHONY: clean
 clean:
 	@echo "rm -rf $(BUILD_DIR)"
 
 ifneq ($(filter clean,$(MAKECMDGOALS)),)
 	$(shell rm -rf $(BUILD_DIR))
+endif
+
+T1 := $(filter-out clean all,$(MAKECMDGOALS))
+ifneq ($(T1),)
+	include $(T1)/Makefile
+.PHONY: $(T1)
+$(T1):
+	@echo >/dev/null
+else
+	include Makefile.$(TARGET_SUBFAMILY)
 endif

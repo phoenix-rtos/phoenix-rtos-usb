@@ -1,18 +1,20 @@
 /*
  * Phoenix-RTOS
  *
- * USB driver Communications Devces Class definitions
+ * USB Communications Device Class definitions
  *
- * Copyright 2018 Phoenix Systems
- * Author: Kamil Amanowicz
+ * Copyright 2018, 2020 Phoenix Systems
+ * Author: Hubert Buczynski, Kamil Amanowicz
  *
  * This file is part of Phoenix-RTOS.
  *
  * %LICENSE%
  */
 
+
 #ifndef _USB_CDC_H_
 #define _USB_CDC_H_
+
 
 /* device class code */
 #define USB_CLASS_CDC 0x2
@@ -38,6 +40,8 @@
 
 
 /*TODO: communications class protocol codes */
+
+
 /*TODO: data class protocol codes */
 
 
@@ -46,11 +50,52 @@
 #define USB_DESC_SUBTYPE_CC_CALL_MGMT 0x1
 #define USB_DESC_SUBTYPE_CC_ACM 0x2
 
+
+/* CDC Header functional descriptor  */
+typedef struct _usb_desc_cdc_header {
+	uint8_t bLength;
+	uint8_t bType;
+	uint8_t bSubType;
+	uint16_t bcdCDC;
+} __attribute__((packed)) usb_desc_cdc_header_t;
+
+
+/* CDC ACM functional descriptor  */
+typedef struct _usb_desc_cdc_acm {
+	uint8_t bLength;
+	uint8_t bType;
+	uint8_t bSubType;
+	uint8_t bmCapabilities;
+} __attribute__((packed)) usb_desc_cdc_acm_t;
+
+
+/* CDC Union functional descriptor  */
+typedef struct _usb_desc_cdc_union {
+	uint8_t bLength;
+	uint8_t bType;
+	uint8_t bSubType;
+	uint8_t bControlInterface;
+	uint8_t bSubordinateInterface;
+} __attribute__((packed)) usb_desc_cdc_union_t;
+
+
+/* CDC Call management functional descriptor  */
+typedef struct _usb_desc_cdc_call {
+	uint8_t bLength;
+	uint8_t bType;
+	uint8_t bSubType;
+	uint8_t bmCapabilities;
+	uint8_t bDataInterface;
+} __attribute__((packed)) usb_desc_cdc_call_t;
+
+
+/* CDC Line Coding Request */
 typedef struct _usb_cdc_line_coding {
-	unsigned int dwDTERate;
-	unsigned char bCharFormat;
-	unsigned char bParityType;
-	unsigned char bDataBits;
-} usb_cdc_line_coding_t;
+	uint32_t dwDTERate;
+	uint8_t bCharFormat;
+	uint8_t bParityType;
+	uint8_t bDataBits;
+} __attribute__((packed)) usb_cdc_line_coding_t;
+
 
 #endif

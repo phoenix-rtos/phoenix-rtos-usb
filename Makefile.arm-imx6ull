@@ -1,12 +1,14 @@
 #
 # Makefile for phoenix-rtos-usb
 #
-# iMX6ULL HCD
+# iMX6ULL usb drivers
 #
 # Copyright 2019 Phoenix Systems
 #
 
-#
-# Host Controller Device drivers used by USB
-#
-HCD_DRIVERS = $(PREFIX_A)libehci-imx6ull.a
+include common/Makefile
+include client/Makefile
+include host/Makefile
+include drivers/telit-le910_host/Makefile
+include drivers/umass_host/Makefile
+include drivers/cdc_demo_client/Makefile
