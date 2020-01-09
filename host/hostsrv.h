@@ -1,22 +1,22 @@
 /*
  * Phoenix-RTOS
  *
- * USB driver
+ * USB Host Server
  *
- * usb/usbd.h
+ * host/hostsrv.h
  *
- * Copyright 2018 Phoenix Systems
- * Author: Jan Sikorski
+ * Copyright 2018, 2020 Phoenix Systems
+ * Author: Jan Sikorski, Hubert Buczynski
  *
  * This file is part of Phoenix-RTOS.
  *
  * %LICENSE%
  */
 
-#ifndef _USBD_H_
-#define _USBD_H_
+#ifndef _USB_HOST_SERVER_H_
+#define _USB_HOST_SERVER_H_
 
-#include "usb.h"
+#include <usb.h>
 
 #define USB_CONNECT_WILDCARD ((unsigned)-1)
 #define USB_CONNECT_NONE ((unsigned)-2)
@@ -45,13 +45,13 @@ typedef struct {
 	int pipe;
 	int transfer_size;
 	int async;
-	setup_packet_t setup;
+	usb_setup_packet_t setup;
 } usb_urb_t;
 
 
 typedef struct {
 	int device_id;
-	endpoint_desc_t endpoint;
+	usb_endpoint_desc_t endpoint;
 } usb_open_t;
 
 
@@ -73,7 +73,7 @@ typedef struct {
 
 
 typedef struct {
-	device_desc_t descriptor;
+	usb_device_desc_t descriptor;
 } usb_insertion_t;
 
 

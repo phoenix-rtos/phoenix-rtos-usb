@@ -1,10 +1,10 @@
-/*
+﻿/*
  * Phoenix-RTOS
  *
- * USB Host driver
+ * USB Host Server
  *
- * Copyright 2018 Phoenix Systems
- * Author: Jan Sikorski
+ * Copyright 2018, 2020 Phoenix Systems
+ * Author: Jan Sikorski, Hubert Buczynski
  *
  * This file is part of Phoenix-RTOS.
  *
@@ -30,12 +30,13 @@
 
 #include <dma.h>
 #include <ehci.h>
-#include "usb.h"
-#include "usbd.h"
+
+#include <usb.h>
+#include "hostsrv.h"
 
 
-#define FUN_TRACE  //fprintf(stderr, "usbd trace: %s\n", __PRETTY_FUNCTION__)
-#define TRACE(x, ...) //fprintf(stderr, "usbd: " x "\n", ##__VA_ARGS__)
+#define FUN_TRACE  //fprintf(stderr, "hostsrv trace: %s\n", __PRETTY_FUNCTION__)
+#define TRACE(x, ...) //fprintf(stderr, "hostsrv: " x "\n", ##__VA_ARGS__)
 #define TRACE_FAIL(x, ...) syslog(LOG_WARNING, x, ##__VA_ARGS__)
 
 
@@ -71,7 +72,7 @@ typedef struct usb_device {
 	usb_endpoint_t *endpoints;
 	usb_endpoint_t *control_endpoint;
 
-	device_desc_t *descriptor;
+	usb_device_desc_t *descriptor;
 	char address;
 	idtree_t pipes;
 	int speed;
@@ -100,7 +101,7 @@ typedef struct usb_transfer {
 	size_t transfer_size;
 	int transfer_type;
 	int direction;
-	setup_packet_t *setup;
+	usb_setup_packet_t *setup;
 
 	usb_qtd_list_t *qtds;
 } usb_transfer_t;
@@ -119,10 +120,10 @@ static struct {
 	handle_t async_cond, port_cond, reset_cond;
 
 	usb_device_t *reset_device;
-} usbd_common;
+} hostsrv_common;
 
 
-usb_qtd_list_t *usb_allocQtd(int token, char *buffer, size_t *size, int datax)
+usb_qtd_list_t *hostsrv_allocQtd(int token, char *buffer, size_t *size, int datax)
 {
 	//FUN_TRACE;
 
@@ -137,18 +138,18 @@ usb_qtd_list_t *usb_allocQtd(int token, char *buffer, size_t *size, int datax)
 }
 
 
-void usb_addQtd(usb_transfer_t *transfer, int token, void *buffer, size_t *size, int datax)
+void hostsrv_addQtd(usb_transfer_t *transfer, int token, void *buffer, size_t *size, int datax)
 {
 	//FUN_TRACE;
 
-	usb_qtd_list_t *el = usb_allocQtd(token, buffer, size, datax);
+	usb_qtd_list_t *el = hostsrv_allocQtd(token, buffer, size, datax);
 
-	TRACE("alloced %p qtd", el->qtd);
+	TRACE("allocated %p qtd", el->qtd);
 	LIST_ADD(&transfer->qtds, el);
 }
 
 
-usb_transfer_t *usb_allocTransfer(usb_endpoint_t *endpoint, int direction, int transfer_type, void *buffer, size_t size, int async)
+usb_transfer_t *hostsrv_allocTransfer(usb_endpoint_t *endpoint, int direction, int transfer_type, void *buffer, size_t size, int async)
 {
 	//FUN_TRACE;
 
@@ -167,7 +168,7 @@ usb_transfer_t *usb_allocTransfer(usb_endpoint_t *endpoint, int direction, int t
 	result->aborted = 0;
 
 	if (async)
-		result->cond = usbd_common.async_cond;
+		result->cond = hostsrv_common.async_cond;
 	else
 		condCreate(&result->cond);
 
@@ -179,7 +180,7 @@ usb_transfer_t *usb_allocTransfer(usb_endpoint_t *endpoint, int direction, int t
 }
 
 
-void usb_deleteTransfer(usb_transfer_t *transfer)
+void hostsrv_deleteTransfer(usb_transfer_t *transfer)
 {
 	//FUN_TRACE;
 
@@ -204,7 +205,7 @@ void usb_deleteTransfer(usb_transfer_t *transfer)
 }
 
 
-void usb_linkTransfer(usb_endpoint_t *endpoint, usb_transfer_t *transfer)
+void hostsrv_linkTransfer(usb_endpoint_t *endpoint, usb_transfer_t *transfer)
 {
 	FUN_TRACE;
 
@@ -226,12 +227,12 @@ void usb_linkTransfer(usb_endpoint_t *endpoint, usb_transfer_t *transfer)
 	}
 
 	TRACE("first: %p last: %p", transfer->qtds->qtd, transfer->qtds->prev->qtd);
-	LIST_ADD(&usbd_common.active_transfers, transfer);
+	LIST_ADD(&hostsrv_common.active_transfers, transfer);
 	ehci_enqueue(endpoint->qh, transfer->qtds->qtd, transfer->qtds->prev->qtd);
 }
 
 
-int usb_finished(usb_transfer_t *transfer)
+int hostsrv_finished(usb_transfer_t *transfer)
 {
 	if (transfer->aborted)
 		return 1;
@@ -258,7 +259,7 @@ int usb_finished(usb_transfer_t *transfer)
 }
 
 
-int usb_handleUrb(usb_urb_t *urb, usb_driver_t *driver, usb_device_t *device, usb_endpoint_t *endpoint, void *buffer)
+int hostsrv_handleUrb(usb_urb_t *urb, usb_driver_t *driver, usb_device_t *device, usb_endpoint_t *endpoint, void *buffer)
 {
 	FUN_TRACE;
 
@@ -270,41 +271,41 @@ int usb_handleUrb(usb_urb_t *urb, usb_driver_t *driver, usb_device_t *device, us
 	int control_token = data_token == out_token ? in_token : out_token;
 
 
-	transfer = usb_allocTransfer(endpoint, urb->direction, urb->type /* FIXME: should explicitly use enum from ehci.h */, buffer, urb->transfer_size, urb->async);
+	transfer = hostsrv_allocTransfer(endpoint, urb->direction, urb->type /* FIXME: should explicitly use enum from ehci.h */, buffer, urb->transfer_size, urb->async);
 
 	if (urb->type == usb_transfer_control) {
 		transfer->setup = dma_alloc64();
 		*transfer->setup = urb->setup;
-		remaining_size = sizeof(setup_packet_t);
-		usb_addQtd(transfer, setup_token, transfer->setup, &remaining_size, 0);
+		remaining_size = sizeof(usb_setup_packet_t);
+		hostsrv_addQtd(transfer, setup_token, transfer->setup, &remaining_size, 0);
 	}
 
 	remaining_size = transfer->transfer_size;
 
 	while (remaining_size) {
 		transfer_buffer = (char *)transfer->transfer_buffer + transfer->transfer_size - remaining_size;
-		usb_addQtd(transfer, data_token, transfer_buffer, &remaining_size, datax);
+		hostsrv_addQtd(transfer, data_token, transfer_buffer, &remaining_size, datax);
 		datax = !datax;
 	}
 
 	if (urb->type == usb_transfer_control) {
-		usb_addQtd(transfer, control_token, NULL, NULL, 1);
+		hostsrv_addQtd(transfer, control_token, NULL, NULL, 1);
 	}
 
 	if (transfer->qtds == NULL) {
-		usb_deleteTransfer(transfer);
+		hostsrv_deleteTransfer(transfer);
 		return EOK;
 	}
 
-	usb_linkTransfer(endpoint, transfer);
+	hostsrv_linkTransfer(endpoint, transfer);
 
 	/* TODO; dont wait here */
 	if (!transfer->async) {
 		while (!transfer->finished && !transfer->aborted)
-			condWait(transfer->cond, usbd_common.common_lock, 0);
+			condWait(transfer->cond, hostsrv_common.common_lock, 0);
 
-		LIST_REMOVE(&usbd_common.active_transfers, transfer);
-		usb_deleteTransfer(transfer);
+		LIST_REMOVE(&hostsrv_common.active_transfers, transfer);
+		hostsrv_deleteTransfer(transfer);
 
 		if (transfer->aborted || transfer->finished < 0)
 			return -EIO;
@@ -317,7 +318,7 @@ int usb_handleUrb(usb_urb_t *urb, usb_driver_t *driver, usb_device_t *device, us
 }
 
 
-int usb_submitUrb(int pid, usb_urb_t *urb, void *inbuf, void *outbuf)
+int hostsrv_submitUrb(int pid, usb_urb_t *urb, void *inbuf, void *outbuf)
 {
 	FUN_TRACE;
 
@@ -329,12 +330,12 @@ int usb_submitUrb(int pid, usb_urb_t *urb, void *inbuf, void *outbuf)
 
 	find.pid = pid;
 
-	if ((driver = lib_treeof(usb_driver_t, linkage, lib_rbFind(&usbd_common.drivers, &find.linkage))) == NULL) {
+	if ((driver = lib_treeof(usb_driver_t, linkage, lib_rbFind(&hostsrv_common.drivers, &find.linkage))) == NULL) {
 		TRACE("no driver");
 		return -EINVAL;
 	}
 
-	if ((device = lib_treeof(usb_device_t, linkage, idtree_find(&usbd_common.devices, urb->device_id))) == NULL) {
+	if ((device = lib_treeof(usb_device_t, linkage, idtree_find(&hostsrv_common.devices, urb->device_id))) == NULL) {
 		TRACE("no device");
 		return -EINVAL;
 	}
@@ -345,7 +346,7 @@ int usb_submitUrb(int pid, usb_urb_t *urb, void *inbuf, void *outbuf)
 	}
 
 	if (urb->transfer_size) {
-		buffer = mmap(NULL, (urb->transfer_size + SIZE_PAGE - 1) & ~(SIZE_PAGE - 1), PROT_WRITE | PROT_READ, MAP_ANONYMOUS | MAP_UNCACHED, OID_NULL, 0);
+		buffer = mmap(NULL, (urb->transfer_size + _PAGE_SIZE - 1) & ~(_PAGE_SIZE - 1), PROT_WRITE | PROT_READ, MAP_ANONYMOUS | MAP_UNCACHED, OID_NULL, 0);
 
 		if (buffer == MAP_FAILED) {
 			TRACE("no mem");
@@ -356,22 +357,22 @@ int usb_submitUrb(int pid, usb_urb_t *urb, void *inbuf, void *outbuf)
 			memcpy(buffer, inbuf, urb->transfer_size);
 	}
 
-	int err = usb_handleUrb(urb, driver, device, endpoint, buffer);
+	int err = hostsrv_handleUrb(urb, driver, device, endpoint, buffer);
 
 	if (outbuf != NULL && urb->direction == usb_transfer_in)
 		memcpy(outbuf, buffer, urb->transfer_size);
 
 	if (buffer != NULL && !urb->async)
-		munmap(buffer, (urb->transfer_size + SIZE_PAGE - 1) & ~(SIZE_PAGE - 1));
+		munmap(buffer, (urb->transfer_size + _PAGE_SIZE - 1) & ~(_PAGE_SIZE - 1));
 
 	return err;
 }
 
 
-int usb_setAddress(usb_device_t *dev, unsigned char address);
+int hostsrv_setAddress(usb_device_t *dev, unsigned char address);
 
 
-void usb_resetDevice(usb_device_t *device)
+void hostsrv_resetDevice(usb_device_t *device)
 {
 	FUN_TRACE;
 
@@ -389,72 +390,72 @@ void usb_resetDevice(usb_device_t *device)
 	}
 
 	usb_transfer_t *transfer;
-	if ((transfer = usbd_common.active_transfers) != NULL) {
+	if ((transfer = hostsrv_common.active_transfers) != NULL) {
 		do {
 			transfer->aborted = 1;
 			condSignal(transfer->cond);
 		}
-		while ((transfer = transfer->next) != usbd_common.active_transfers);
+		while ((transfer = transfer->next) != hostsrv_common.active_transfers);
 	}
 
 	ehci_resetPort();
 
 	device->address = 0;
-	usb_setAddress(device, 1 + idtree_id(&device->linkage));
+	hostsrv_setAddress(device, 1 + idtree_id(&device->linkage));
 	TRACE("reset: address is set");
 	device->address = 1 + idtree_id(&device->linkage);
 	ehci_qhSetAddress(device->control_endpoint->qh, device->address);
 }
 
 
-void usb_resetThread(void *arg)
+void hostsrv_resetThread(void *arg)
 {
-	mutexLock(usbd_common.common_lock);
+	mutexLock(hostsrv_common.common_lock);
 
 	for (;;) {
-		condWait(usbd_common.reset_cond, usbd_common.common_lock, 0);
+		condWait(hostsrv_common.reset_cond, hostsrv_common.common_lock, 0);
 
-		if (usbd_common.reset_device != NULL) {
-			usb_resetDevice(usbd_common.reset_device);
-			usbd_common.reset_device = NULL;
+		if (hostsrv_common.reset_device != NULL) {
+			hostsrv_resetDevice(hostsrv_common.reset_device);
+			hostsrv_common.reset_device = NULL;
 		}
 	}
 }
 
 
-void usb_eventCallback(int port_change)
+void hostsrv_eventCallback(int port_change)
 {
 	FUN_TRACE;
 	usb_transfer_t *transfer;
 	int error;
 
-	if ((transfer = usbd_common.active_transfers) != NULL) {
+	if ((transfer = hostsrv_common.active_transfers) != NULL) {
 		do {
-			if (!transfer->finished && (error = usb_finished(transfer))) {
+			if (!transfer->finished && (error = hostsrv_finished(transfer))) {
 				TRACE("transfer finished %x", transfer->id);
 				transfer->finished = error;
 
 				if (transfer->async)
-					LIST_ADD_EX(&usbd_common.finished_transfers, transfer, finished_next, finished_prev);
+					LIST_ADD_EX(&hostsrv_common.finished_transfers, transfer, finished_next, finished_prev);
 
 				ehci_continue(transfer->endpoint->qh, transfer->qtds->prev->qtd);
 				condBroadcast(transfer->cond);
 			}
 			transfer = transfer->next;
 		}
-		while (transfer != usbd_common.active_transfers);
+		while (transfer != hostsrv_common.active_transfers);
 	}
 
 	if (port_change) {
 		TRACE("port change");
-		condSignal(usbd_common.port_cond);
+		condSignal(hostsrv_common.port_cond);
 	}
 
 	TRACE("callback out");
 }
 
 
-int usb_countBytes(usb_transfer_t *transfer)
+int hostsrv_countBytes(usb_transfer_t *transfer)
 {
 	size_t transferred_bytes = 0;
 	usb_qtd_list_t *qtd;
@@ -470,7 +471,7 @@ int usb_countBytes(usb_transfer_t *transfer)
 }
 
 
-void usb_signalDetach(usb_device_t *device)
+void hostsrv_signalDetach(usb_device_t *device)
 {
 	FUN_TRACE;
 
@@ -493,7 +494,7 @@ void usb_signalDetach(usb_device_t *device)
 }
 
 
-void usb_signalDriver(usb_transfer_t *transfer)
+void hostsrv_signalDriver(usb_transfer_t *transfer)
 {
 	FUN_TRACE;
 
@@ -521,7 +522,7 @@ void usb_signalDriver(usb_transfer_t *transfer)
 		event->completion.error = EOK;
 
 	if (transfer->direction == usb_transfer_in) {
-		msg.i.size = usb_countBytes(transfer);
+		msg.i.size = hostsrv_countBytes(transfer);
 		msg.i.data = transfer->transfer_buffer;
 	}
 
@@ -531,30 +532,30 @@ void usb_signalDriver(usb_transfer_t *transfer)
 }
 
 
-void usb_signalThread(void *arg)
+void hostsrv_signalThread(void *arg)
 {
 	usb_transfer_t *transfer;
 
-	mutexLock(usbd_common.common_lock);
+	mutexLock(hostsrv_common.common_lock);
 
 	for (;;) {
-		while ((transfer = usbd_common.finished_transfers) == NULL)
-			condWait(usbd_common.async_cond, usbd_common.common_lock, 0);
+		while ((transfer = hostsrv_common.finished_transfers) == NULL)
+			condWait(hostsrv_common.async_cond, hostsrv_common.common_lock, 0);
 
-		LIST_REMOVE(&usbd_common.active_transfers, transfer);
-		LIST_REMOVE_EX(&usbd_common.finished_transfers, transfer, finished_next, finished_prev);
+		LIST_REMOVE(&hostsrv_common.active_transfers, transfer);
+		LIST_REMOVE_EX(&hostsrv_common.finished_transfers, transfer, finished_next, finished_prev);
 
-		mutexUnlock(usbd_common.common_lock);
-		usb_signalDriver(transfer);
-		mutexLock(usbd_common.common_lock);
+		mutexUnlock(hostsrv_common.common_lock);
+		hostsrv_signalDriver(transfer);
+		mutexLock(hostsrv_common.common_lock);
 
-		munmap(transfer->transfer_buffer, (transfer->transfer_size + SIZE_PAGE - 1) & ~(SIZE_PAGE - 1));
-		usb_deleteTransfer(transfer);
+		munmap(transfer->transfer_buffer, (transfer->transfer_size + _PAGE_SIZE - 1) & ~(_PAGE_SIZE - 1));
+		hostsrv_deleteTransfer(transfer);
 	}
 }
 
 
-int usb_control(usb_device_t *device, int direction, setup_packet_t *setup, void *buffer, int size)
+int hostsrv_control(usb_device_t *device, int direction, usb_setup_packet_t *setup, void *buffer, int size)
 {
 	usb_urb_t urb = (usb_urb_t) {
 		.type = usb_transfer_control,
@@ -566,58 +567,58 @@ int usb_control(usb_device_t *device, int direction, setup_packet_t *setup, void
 		.setup = *setup,
 	};
 
-	return usb_handleUrb(&urb, device->driver, device, device->control_endpoint, buffer);
+	return hostsrv_handleUrb(&urb, device->driver, device, device->control_endpoint, buffer);
 }
 
 
-int usb_setAddress(usb_device_t *dev, unsigned char address)
+int hostsrv_setAddress(usb_device_t *dev, unsigned char address)
 {
 	FUN_TRACE;
 
-	setup_packet_t setup = (setup_packet_t) {
+	usb_setup_packet_t setup = (usb_setup_packet_t) {
 		.bmRequestType = REQUEST_DIR_HOST2DEV | REQUEST_TYPE_STANDARD | REQUEST_RECIPIENT_DEVICE,
-		.bRequest = SET_ADDRESS,
+		.bRequest = REQ_SET_ADDRESS,
 		.wValue = address,
 		.wIndex = 0,
 		.wLength = 0,
 	};
 
-	return usb_control(dev, usb_transfer_out, &setup, NULL, 0);
+	return hostsrv_control(dev, usb_transfer_out, &setup, NULL, 0);
 }
 
 
-int usb_getDescriptor(usb_device_t *dev, int descriptor, int index, char *buffer, int size)
+int hostsrv_getDescriptor(usb_device_t *dev, int descriptor, int index, char *buffer, int size)
 {
 	FUN_TRACE;
 
-	setup_packet_t setup = (setup_packet_t) {
+	usb_setup_packet_t setup = (usb_setup_packet_t) {
 		.bmRequestType = REQUEST_DIR_DEV2HOST | REQUEST_TYPE_STANDARD | REQUEST_RECIPIENT_DEVICE,
-		.bRequest = GET_DESCRIPTOR,
+		.bRequest = REQ_GET_DESCRIPTOR,
 		.wValue = descriptor << 8 | index,
 		.wIndex = 0,
 		.wLength = size,
 	};
 
-	return usb_control(dev, usb_transfer_in, &setup, buffer, size);
+	return hostsrv_control(dev, usb_transfer_in, &setup, buffer, size);
 }
 
 
-int usb_getConfigurationDescriptor(usb_device_t *dev, configuration_desc_t *desc, int index, int length)
+int hostsrv_getConfigurationDescriptor(usb_device_t *dev, usb_configuration_desc_t *desc, int index, int length)
 {
-	return usb_getDescriptor(dev, DESC_CONFIG, index, (char *)desc, length);
+	return hostsrv_getDescriptor(dev, USB_DESC_CONFIG, index, (char *)desc, length);
 }
 
 
-int usb_getDeviceDescriptor(usb_device_t *dev, device_desc_t *desc)
+int hostsrv_getDeviceDescriptor(usb_device_t *dev, usb_device_desc_t *desc)
 {
-	return usb_getDescriptor(dev, DESC_DEVICE, 0, (char *)desc, sizeof(*desc));
+	return hostsrv_getDescriptor(dev, USB_DESC_DEVICE, 0, (char *)desc, sizeof(*desc));
 }
 
 
-int usb_driverMatch1(usb_driver_t *driver, usb_device_t *device)
+int hostsrv_driverMatch1(usb_driver_t *driver, usb_device_t *device)
 {
 	usb_device_id_t *filter = &driver->filter;
-	device_desc_t *descriptor = device->descriptor;
+	usb_device_desc_t *descriptor = device->descriptor;
 
 	return (filter->idVendor == USB_CONNECT_WILDCARD || filter->idVendor == descriptor->idVendor) &&
 		(filter->idProduct == USB_CONNECT_WILDCARD || filter->idProduct == descriptor->idProduct) &&
@@ -625,20 +626,20 @@ int usb_driverMatch1(usb_driver_t *driver, usb_device_t *device)
 }
 
 
-int usb_driverMatch2(usb_driver_t *driver, usb_device_t *device)
+int hostsrv_driverMatch2(usb_driver_t *driver, usb_device_t *device)
 {
 	usb_device_id_t *filter = &driver->filter;
-	device_desc_t *descriptor = device->descriptor;
+	usb_device_desc_t *descriptor = device->descriptor;
 
 	return (filter->idVendor == USB_CONNECT_WILDCARD || filter->idVendor == descriptor->idVendor) &&
 		(filter->idProduct == USB_CONNECT_WILDCARD || filter->idProduct == descriptor->idProduct);
 }
 
 
-int usb_driverMatch3(usb_driver_t *driver, usb_device_t *device)
+int hostsrv_driverMatch3(usb_driver_t *driver, usb_device_t *device)
 {
 	usb_device_id_t *filter = &driver->filter;
-	device_desc_t *descriptor = device->descriptor;
+	usb_device_desc_t *descriptor = device->descriptor;
 
 	if (descriptor->bDeviceClass == 0xff) {
 		return (filter->idVendor == USB_CONNECT_WILDCARD || filter->idVendor == descriptor->idVendor) &&
@@ -653,10 +654,10 @@ int usb_driverMatch3(usb_driver_t *driver, usb_device_t *device)
 }
 
 
-int usb_driverMatch4(usb_driver_t *driver, usb_device_t *device)
+int hostsrv_driverMatch4(usb_driver_t *driver, usb_device_t *device)
 {
 	usb_device_id_t *filter = &driver->filter;
-	device_desc_t *descriptor = device->descriptor;
+	usb_device_desc_t *descriptor = device->descriptor;
 
 	if (descriptor->bDeviceClass == 0xff) {
 		return (filter->idVendor == USB_CONNECT_WILDCARD || filter->idVendor == descriptor->idVendor) &&
@@ -669,12 +670,12 @@ int usb_driverMatch4(usb_driver_t *driver, usb_device_t *device)
 }
 
 
-usb_driver_t *usb_findDriver(usb_device_t *device)
+usb_driver_t *hostsrv_findDriver(usb_device_t *device)
 {
 	FUN_TRACE;
 
 	const int (*usb_driverMatch[])(usb_driver_t *, usb_device_t *) = {
-		usb_driverMatch1, usb_driverMatch2, usb_driverMatch3, usb_driverMatch4
+		hostsrv_driverMatch1, hostsrv_driverMatch2, hostsrv_driverMatch3, hostsrv_driverMatch4
 	};
 
 	rbnode_t *node;
@@ -682,7 +683,7 @@ usb_driver_t *usb_findDriver(usb_device_t *device)
 	int i;
 
 	for (i = 0; i < 4; ++i) {
-		for (node = lib_rbMinimum(usbd_common.drivers.root); node != NULL; node = lib_rbNext(node)) {
+		for (node = lib_rbMinimum(hostsrv_common.drivers.root); node != NULL; node = lib_rbNext(node)) {
 			driver = lib_treeof(usb_driver_t, linkage, node);
 			if (usb_driverMatch[i](driver, device)) {
 				TRACE("found driver");
@@ -694,7 +695,7 @@ usb_driver_t *usb_findDriver(usb_device_t *device)
 }
 
 
-int usb_connectDriver(usb_driver_t *driver, usb_device_t *device, configuration_desc_t *configuration)
+int hostsrv_connectDriver(usb_driver_t *driver, usb_device_t *device, usb_configuration_desc_t *configuration)
 {
 	FUN_TRACE;
 
@@ -709,19 +710,19 @@ int usb_connectDriver(usb_driver_t *driver, usb_device_t *device, configuration_
 
 	event->type = usb_event_insertion;
 	event->device_id = idtree_id(&device->linkage);
-	memcpy(&insertion->descriptor, device->descriptor, sizeof(device_desc_t));
+	memcpy(&insertion->descriptor, device->descriptor, sizeof(usb_device_desc_t));
 
 	return msgSend(driver->port, &msg);
 }
 
 
-usb_endpoint_t *usb_findPipe(usb_device_t *device, int pipe)
+usb_endpoint_t *hostsrv_findPipe(usb_device_t *device, int pipe)
 {
 	return lib_treeof(usb_endpoint_t, linkage, idtree_find(&device->pipes, pipe));
 }
 
 
-int usb_openPipe(usb_device_t *device, endpoint_desc_t *descriptor)
+int hostsrv_openPipe(usb_device_t *device, usb_endpoint_desc_t *descriptor)
 {
 	FUN_TRACE;
 
@@ -739,25 +740,25 @@ int usb_openPipe(usb_device_t *device, endpoint_desc_t *descriptor)
 }
 
 
-int usb_getConfiguration(usb_device_t *device, void *buffer, size_t bufsz)
+int hostsrv_getConfiguration(usb_device_t *device, void *buffer, size_t bufsz)
 {
 	FUN_TRACE;
 
-	configuration_desc_t *conf = dma_alloc64();
+	usb_configuration_desc_t *conf = dma_alloc64();
 
-	usb_getConfigurationDescriptor(device, conf, 0, sizeof(configuration_desc_t));
+	hostsrv_getConfigurationDescriptor(device, conf, 0, sizeof(usb_configuration_desc_t));
 
 	if (bufsz < conf->wTotalLength)
 		return -ENOBUFS;
 
-	usb_getConfigurationDescriptor(device, buffer, 0, conf->wTotalLength);
+	hostsrv_getConfigurationDescriptor(device, buffer, 0, conf->wTotalLength);
 
 	dma_free64(conf);
 	return EOK;
 }
 
 
-void usb_dumpDeviceDescriptor(FILE *stream, device_desc_t *descr)
+void hostsrv_dumpDeviceDescriptor(FILE *stream, usb_device_desc_t *descr)
 {
 	fprintf(stream, "DEVICE DESCRIPTOR:\n");
 	fprintf(stream, "\tbLength: %d\n", descr->bLength);
@@ -777,7 +778,7 @@ void usb_dumpDeviceDescriptor(FILE *stream, device_desc_t *descr)
 }
 
 
-int usb_deviceAttach(void)
+int hostsrv_deviceAttach(void)
 {
 	FUN_TRACE;
 
@@ -785,7 +786,7 @@ int usb_deviceAttach(void)
 	usb_endpoint_t *ep;
 	usb_driver_t *driver;
 	void *configuration;
-	device_desc_t *ddesc = dma_alloc64();
+	usb_device_desc_t *ddesc = dma_alloc64();
 
 	TRACE("reset");
 	ehci_resetPort();
@@ -803,7 +804,7 @@ int usb_deviceAttach(void)
 	idtree_alloc(&dev->pipes, &ep->linkage);
 
 	TRACE("getting device descriptor");
-	if (usb_getDeviceDescriptor(dev, ddesc) < 0) {
+	if (hostsrv_getDeviceDescriptor(dev, ddesc) < 0) {
 		TRACE_FAIL("getting device descriptor");
 		free(dev);
 		free(ep);
@@ -818,47 +819,47 @@ int usb_deviceAttach(void)
 	ep->max_packet_len = ddesc->bMaxPacketSize0;
 
 	if (0) {
-		usb_dumpDeviceDescriptor(stderr, ddesc);
+		hostsrv_dumpDeviceDescriptor(stderr, ddesc);
 	}
 
 	TRACE("setting address");
-	idtree_alloc(&usbd_common.devices, &dev->linkage);
+	idtree_alloc(&hostsrv_common.devices, &dev->linkage);
 
-	usb_setAddress(dev, 1 + idtree_id(&dev->linkage));
+	hostsrv_setAddress(dev, 1 + idtree_id(&dev->linkage));
 	dev->address = 1 + idtree_id(&dev->linkage);
 	ehci_qhSetAddress(dev->control_endpoint->qh, dev->address);
 
-	if ((driver = usb_findDriver(dev)) != NULL) {
+	if ((driver = hostsrv_findDriver(dev)) != NULL) {
 		TRACE("got driver");
-		configuration = mmap(NULL, SIZE_PAGE, PROT_WRITE | PROT_READ, MAP_ANONYMOUS | MAP_UNCACHED, OID_NULL, 0);
-		usb_getConfiguration(dev, configuration, SIZE_PAGE);
-		if (usb_connectDriver(driver, dev, configuration) < 0) {
-			LIST_ADD(&usbd_common.orphan_devices, dev);
+		configuration = mmap(NULL, _PAGE_SIZE, PROT_WRITE | PROT_READ, MAP_ANONYMOUS | MAP_UNCACHED, OID_NULL, 0);
+		hostsrv_getConfiguration(dev, configuration, _PAGE_SIZE);
+		if (hostsrv_connectDriver(driver, dev, configuration) < 0) {
+			LIST_ADD(&hostsrv_common.orphan_devices, dev);
 			dev->driver = NULL;
 		}
 		else {
 			LIST_ADD(&driver->devices, dev);
 			dev->driver = driver;
 		}
-		munmap(configuration, SIZE_PAGE);
+		munmap(configuration, _PAGE_SIZE);
 	}
 	else {
 		TRACE("no driver");
-		LIST_ADD(&usbd_common.orphan_devices, dev);
+		LIST_ADD(&hostsrv_common.orphan_devices, dev);
 	}
 
 	return EOK;
 }
 
 
-void usb_deviceDetach(void)
+void hostsrv_deviceDetach(void)
 {
 	FUN_TRACE;
-	usb_device_t *device = lib_treeof(usb_device_t, linkage, usbd_common.devices.root);
+	usb_device_t *device = lib_treeof(usb_device_t, linkage, hostsrv_common.devices.root);
 
 	if (device != NULL) {
 		TRACE_FAIL("device detached");
-		idtree_remove(&usbd_common.devices, &device->linkage);
+		idtree_remove(&hostsrv_common.devices, &device->linkage);
 
 		/* TODO: remove active transfers */
 
@@ -874,11 +875,11 @@ void usb_deviceDetach(void)
 
 		if (device->driver != NULL) {
 			LIST_REMOVE(&device->driver->devices, device);
-			usb_signalDetach(device);
+			hostsrv_signalDetach(device);
 			device->driver = NULL;
 		}
 		else {
-			LIST_REMOVE(&usbd_common.orphan_devices, device);
+			LIST_REMOVE(&hostsrv_common.orphan_devices, device);
 		}
 
 		free(device);
@@ -886,14 +887,14 @@ void usb_deviceDetach(void)
 }
 
 
-void usb_portthr(void *arg)
+void hostsrv_portthr(void *arg)
 {
 	int attached = 0;
 
-	mutexLock(usbd_common.common_lock);
+	mutexLock(hostsrv_common.common_lock);
 
 	for (;;) {
-		condWait(usbd_common.port_cond, usbd_common.common_lock, 0);
+		condWait(hostsrv_common.port_cond, hostsrv_common.common_lock, 0);
 		FUN_TRACE;
 
 		if (ehci_deviceAttached()) {
@@ -901,7 +902,7 @@ void usb_portthr(void *arg)
 				TRACE_FAIL("double attach");
 			}
 			else {
-				if (usb_deviceAttach() == EOK)
+				if (hostsrv_deviceAttach() == EOK)
 					attached = 1;
 			}
 		}
@@ -910,7 +911,7 @@ void usb_portthr(void *arg)
 				TRACE_FAIL("double detach");
 			}
 			else {
-				usb_deviceDetach();
+				hostsrv_deviceDetach();
 				attached = 0;
 			}
 		}
@@ -918,12 +919,12 @@ void usb_portthr(void *arg)
 }
 
 
-int usb_connect(usb_connect_t *c, unsigned pid)
+int hostsrv_connect(usb_connect_t *c, unsigned pid)
 {
 	FUN_TRACE;
 
 	const int (*usb_driverMatch[])(usb_driver_t *, usb_device_t *) = {
-		usb_driverMatch1, usb_driverMatch2, usb_driverMatch3, usb_driverMatch4
+		hostsrv_driverMatch1, hostsrv_driverMatch2, hostsrv_driverMatch3, hostsrv_driverMatch4
 	};
 
 	int i;
@@ -939,33 +940,33 @@ int usb_connect(usb_connect_t *c, unsigned pid)
 	driver->pid = pid;
 	driver->devices = NULL;
 
-	lib_rbInsert(&usbd_common.drivers, &driver->linkage);
+	lib_rbInsert(&hostsrv_common.drivers, &driver->linkage);
 
-	if (usbd_common.orphan_devices != NULL) {
-		configuration = mmap(NULL, SIZE_PAGE, PROT_WRITE | PROT_READ, MAP_ANONYMOUS | MAP_UNCACHED, OID_NULL, 0);
+	if (hostsrv_common.orphan_devices != NULL) {
+		configuration = mmap(NULL, _PAGE_SIZE, PROT_WRITE | PROT_READ, MAP_ANONYMOUS | MAP_UNCACHED, OID_NULL, 0);
 
 		if (configuration == MAP_FAILED)
 			return -ENOMEM;
 
 		for (i = 0; i < 4; ++i) {
-			device = usbd_common.orphan_devices;
+			device = hostsrv_common.orphan_devices;
 
 			do {
 				while (device != NULL && usb_driverMatch[i](driver, device)) {
-					usb_getConfiguration(device, configuration, SIZE_PAGE);
-					usb_connectDriver(driver, device, configuration);
+					hostsrv_getConfiguration(device, configuration, _PAGE_SIZE);
+					hostsrv_connectDriver(driver, device, configuration);
 					device->driver = driver;
 
-					LIST_REMOVE(&usbd_common.orphan_devices, device);
+					LIST_REMOVE(&hostsrv_common.orphan_devices, device);
 					LIST_ADD(&driver->devices, device);
 
-					device = usbd_common.orphan_devices;
+					device = hostsrv_common.orphan_devices;
 				}
 			}
-			while (device != NULL && (device = device->next) != usbd_common.orphan_devices);
+			while (device != NULL && (device = device->next) != hostsrv_common.orphan_devices);
 		}
 
-		munmap(configuration, SIZE_PAGE);
+		munmap(configuration, _PAGE_SIZE);
 	}
 
 	telit = pid;
@@ -974,27 +975,27 @@ int usb_connect(usb_connect_t *c, unsigned pid)
 }
 
 
-int usb_submitReset(int device_id)
+int hostsrv_submitReset(int device_id)
 {
 	usb_device_t *device;
 
-	if ((device = lib_treeof(usb_device_t, linkage, idtree_find(&usbd_common.devices, device_id))) == NULL)
+	if ((device = lib_treeof(usb_device_t, linkage, idtree_find(&hostsrv_common.devices, device_id))) == NULL)
 		return -EINVAL;
 
-	usb_resetDevice(device);
+	hostsrv_resetDevice(device);
 	return EOK;
 }
 
 
-int usb_open(usb_open_t *o, msg_t *msg)
+int hostsrv_open(usb_open_t *o, msg_t *msg)
 {
 	FUN_TRACE;
 	usb_device_t *device;
 
-	if ((device = lib_treeof(usb_device_t, linkage, idtree_find(&usbd_common.devices, o->device_id))) == NULL)
+	if ((device = lib_treeof(usb_device_t, linkage, idtree_find(&hostsrv_common.devices, o->device_id))) == NULL)
 		return -EINVAL;
 
-	return usb_openPipe(device, &o->endpoint);
+	return hostsrv_openPipe(device, &o->endpoint);
 }
 
 
@@ -1010,22 +1011,22 @@ void msgthr(void *arg)
 		if (msgRecv(port, &msg, &rid) < 0)
 			continue;
 
-		mutexLock(usbd_common.common_lock);
+		mutexLock(hostsrv_common.common_lock);
 		if (msg.type == mtDevCtl) {
 			umsg = (void *)msg.i.raw;
 
 			switch (umsg->type) {
 			case usb_msg_connect:
-				msg.o.io.err = usb_connect(&umsg->connect, msg.pid);
+				msg.o.io.err = hostsrv_connect(&umsg->connect, msg.pid);
 				break;
 			case usb_msg_urb:
-				msg.o.io.err = usb_submitUrb(msg.pid, &umsg->urb, msg.i.data, msg.o.data);
+				msg.o.io.err = hostsrv_submitUrb(msg.pid, &umsg->urb, msg.i.data, msg.o.data);
 				break;
 			case usb_msg_open:
-				msg.o.io.err = usb_open(&umsg->open, &msg);
+				msg.o.io.err = hostsrv_open(&umsg->open, &msg);
 				break;
 			case usb_msg_reset:
-				msg.o.io.err = usb_submitReset(umsg->reset.device_id);
+				msg.o.io.err = hostsrv_submitReset(umsg->reset.device_id);
 				break;
 			default:
 				TRACE_FAIL("unsupported usb_msg type");
@@ -1036,14 +1037,14 @@ void msgthr(void *arg)
 			TRACE_FAIL("unsupported msg type");
 			msg.o.io.err = -EINVAL;
 		}
-		mutexUnlock(usbd_common.common_lock);
+		mutexUnlock(hostsrv_common.common_lock);
 
 		msgRespond(port, &msg, rid);
 	}
 }
 
 
-int usb_driver_cmp(rbnode_t *n1, rbnode_t *n2)
+int hostsrv_driverCmp(rbnode_t *n1, rbnode_t *n2)
 {
 	usb_driver_t *d1 = lib_treeof(usb_driver_t, linkage, n1);
 	usb_driver_t *d2 = lib_treeof(usb_driver_t, linkage, n2);
@@ -1061,38 +1062,38 @@ int main(int argc, char **argv)
 {
 	FUN_TRACE;
 	oid_t oid;
-	portCreate(&usbd_common.port);
+	portCreate(&hostsrv_common.port);
 
-	mutexCreate(&usbd_common.common_lock);
-	condCreate(&usbd_common.port_cond);
-	condCreate(&usbd_common.async_cond);
-	condCreate(&usbd_common.reset_cond);
+	mutexCreate(&hostsrv_common.common_lock);
+	condCreate(&hostsrv_common.port_cond);
+	condCreate(&hostsrv_common.async_cond);
+	condCreate(&hostsrv_common.reset_cond);
 
-	openlog("usbd", LOG_CONS, LOG_DAEMON);
+	openlog("hostsrv", LOG_CONS, LOG_DAEMON);
 
-	usbd_common.active_transfers = NULL;
-	usbd_common.finished_transfers = NULL;
-	usbd_common.orphan_devices = NULL;
-	usbd_common.reset_device = NULL;
-	lib_rbInit(&usbd_common.drivers, usb_driver_cmp, NULL);
-	idtree_init(&usbd_common.devices);
+	hostsrv_common.active_transfers = NULL;
+	hostsrv_common.finished_transfers = NULL;
+	hostsrv_common.orphan_devices = NULL;
+	hostsrv_common.reset_device = NULL;
+	lib_rbInit(&hostsrv_common.drivers, hostsrv_driverCmp, NULL);
+	idtree_init(&hostsrv_common.devices);
 
-	ehci_init(usb_eventCallback, usbd_common.common_lock);
+	ehci_init(hostsrv_eventCallback, hostsrv_common.common_lock);
 
-	oid.port = usbd_common.port;
+	oid.port = hostsrv_common.port;
 	oid.id = 0;
 	create_dev(&oid, "/dev/usb");
 
-	beginthread(usb_portthr, 4, malloc(0x4000), 0x4000, NULL);
-	beginthread(usb_signalThread, 4, malloc(0x4000), 0x4000, NULL);
-	beginthread(usb_resetThread, 4, malloc(0x4000), 0x4000, NULL);
+	beginthread(hostsrv_portthr, 4, malloc(0x4000), 0x4000, NULL);
+	beginthread(hostsrv_signalThread, 4, malloc(0x4000), 0x4000, NULL);
+	beginthread(hostsrv_resetThread, 4, malloc(0x4000), 0x4000, NULL);
 
-	beginthread(msgthr, 4, malloc(0x4000), 0x4000, (void *)usbd_common.port);
-	beginthread(msgthr, 4, malloc(0x4000), 0x4000, (void *)usbd_common.port);
-	beginthread(msgthr, 4, malloc(0x4000), 0x4000, (void *)usbd_common.port);
+	beginthread(msgthr, 4, malloc(0x4000), 0x4000, (void *)hostsrv_common.port);
+	beginthread(msgthr, 4, malloc(0x4000), 0x4000, (void *)hostsrv_common.port);
+	beginthread(msgthr, 4, malloc(0x4000), 0x4000, (void *)hostsrv_common.port);
 
-	printf("usb: initialized\n");
-	msgthr((void *)usbd_common.port);
+	printf("hostsrv: initialized\n");
+	msgthr((void *)hostsrv_common.port);
 	return 0;
 }
 
