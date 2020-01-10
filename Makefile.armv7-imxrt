@@ -18,7 +18,7 @@ endif
 
 include common/Makefile
 include client/Makefile
-include host/Makefile
-include drivers/telit-le910_host/Makefile
-include drivers/umass_host/Makefile
+# include host/Makefile
+# include drivers/telit-le910_host/Makefile
+# include drivers/umass_host/Makefile
 include drivers/cdc_demo_client/Makefile
