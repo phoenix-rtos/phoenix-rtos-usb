@@ -19,9 +19,11 @@
 /* device class code */
 #define USB_CLASS_CDC 0x2
 
+
 /* interface class code */
 #define USB_INTERFACE_COMMUNICATIONS 0x2
 #define USB_INTERFACE_DATA 0xA
+
 
 /* communications class subclass codes */
 #define USB_SUBCLASS_DLCM 0x1			/* direct line control model */
@@ -37,12 +39,6 @@
 #define USB_SUBCLASS_OBEX 0xB			/* OBEX */
 #define USB_SUBCLASS_EEM 0xC			/* ethernet emulation model */
 #define USB_SUBCLASS_NCM 0xD			/* network control model */
-
-
-/*TODO: communications class protocol codes */
-
-
-/*TODO: data class protocol codes */
 
 
 /* descriptors subclassses for communications class (CC)*/

@@ -21,10 +21,17 @@
 
 #include <cdc_client.h>
 
+#define RCV_MODE 2
+#define SENDING_MODE 1
+
+#define CDC_MODE RCV_MODE
+
+#define ENDPOINT_BULK 2
+#define BUFF_SIZE 0x1000
+
 #define LOG(str, ...) do { if (1) fprintf(stderr, "cdc-client: " str "\n", ##__VA_ARGS__); } while (0)
 #define LOG_ERROR(str, ...) do { fprintf(stderr, __FILE__  ":%d error: " str "\n", __LINE__, ##__VA_ARGS__); } while (0)
 
-#define BUFF_SIZE 0x400
 
 struct {
 	char buff[BUFF_SIZE];
@@ -45,59 +52,40 @@ static void cdc_enabelCache(unsigned char enable)
 
 static void cdc_fillBuff(void)
 {
-	int i, hd;
+	int i;
 
-	for (i = 0, hd = 64; i < hd; ++i)
-		client_common.buff[i] = 'f';
-
-	for (i = hd; i < BUFF_SIZE; ++i)
-		client_common.buff[i] = 'a';
-
-	client_common.buff[0] = '\n';
+	for (i = 0; i < BUFF_SIZE; i++)
+		client_common.buff[i] = 'A' + i % ('Z' - 'A');
 }
 
 
 int main(int argc, char **argv)
 {
-	usb_cdc_line_coding_t lineCoding;
-
+	sleep(1);
 	cdc_enabelCache(0);
 
-	LOG("initialized.");
+	LOG("started.");
 
 	if (cdc_init()) {
 		LOG_ERROR("couldn't initialize CDC transport.");
 		return -1;
 	}
 
-	LOG("initialized.");
-
-	/* SET Line Coding Request */
-	cdc_recv((char *)client_common.buff, 0x20);
-	memcpy((void *)&lineCoding, (void *)client_common.buff, sizeof(usb_cdc_line_coding_t));
-	LOG("basic attributes: \nSpeed: %d [bps] \tStop bits: %d \tParity: %d \tData length: %d", lineCoding.dwDTERate, lineCoding.bCharFormat, lineCoding.bParityType, lineCoding.bDataBits);
-
-	/* SET Control Line State */
-	cdc_recv((char *)client_common.buff, 0x20);
-
-	/* SET Line Coding Request - this packet is received only if the ttyACM is opened with additional attributes */
-	cdc_recv((char *)client_common.buff, 0x20);
-	memcpy((void *)&lineCoding, (void *)client_common.buff, sizeof(usb_cdc_line_coding_t));
-	LOG("new attributes: \nSpeed: %d [bps] \tStop bits: %d \tParity: %d \tData length: %d", lineCoding.dwDTERate, lineCoding.bCharFormat, lineCoding.bParityType, lineCoding.bDataBits);
-
+#if CDC_MODE == SENDING_MODE
 	cdc_fillBuff();
 
-	/* Send example data
-	 * CDC Header is ommited. Due to this fact, the packet's protocol is unknown. */
-	cdc_send((char *)client_common.buff, BUFF_SIZE);
-	cdc_send((char *)client_common.buff, BUFF_SIZE);
-	cdc_send((char *)client_common.buff, BUFF_SIZE);
-	cdc_send((char *)client_common.buff, BUFF_SIZE);
+	LOG("SENDING MODE initialized.");
+	while (1)
+		cdc_send(ENDPOINT_BULK, (char *)client_common.buff, BUFF_SIZE);
+#elif CDC_MODE == RCV_MODE
+	LOG("RCV MODE initialized.");
 
-	LOG("Transaction completed.");
-
-	while (1) {
-	}
+	while (1)
+		printf("Size: %d\n", cdc_recv(ENDPOINT_BULK, (char *)client_common.buff, BUFF_SIZE));
+#else
+	while (1)
+	{}
+#endif
 
 	return EOK;
 }

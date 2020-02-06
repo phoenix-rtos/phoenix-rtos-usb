@@ -14,6 +14,7 @@
 
 #include <errno.h>
 #include <stdio.h>
+#include <sys/list.h>
 
 #include <usbclient.h>
 
@@ -21,7 +22,7 @@
 
 
 struct {
-	usb_conf_t config;
+	usb_desc_list_t *descList;
 
 	usb_desc_list_t dev;
 	usb_desc_list_t conf;
@@ -77,15 +78,15 @@ static const usb_string_desc_t dstr0 = {
 };
 
 
-int hid_recv(char *data, unsigned int len)
+int hid_recv(int endpt, char *data, unsigned int len)
 {
-	return usbclient_receive(&hid_common.config.endpoint_list.endpoints[0], data, len);
+	return usbclient_receive(endpt, data, len);
 }
 
 
-int hid_send(const char *data, unsigned int len)
+int hid_send(int endpt, const char *data, unsigned int len)
 {
-	return usbclient_send(&hid_common.config.endpoint_list.endpoints[1], data, len);
+	return usbclient_send(endpt, data, len);
 }
 
 
@@ -97,57 +98,39 @@ void hid_destroy(void)
 
 int hid_init(const usb_hid_dev_setup_t *dev_setup)
 {
-	int res;
+	int res = EOK;
 
-	usb_endpoint_list_t endpoints = {
-		.size = 2,
-		.endpoints = {
-			{ .id = 0, .type = USB_ENDPT_TYPE_CONTROL, .direction = 0                     /* for control endpoint it's ignored */},
-			{ .id = 1, .type = USB_ENDPT_TYPE_INTR, .direction = USB_ENDPT_DIR_IN } /* IN interrupt endpoint required for HID */
-		}
-	};
+	hid_common.dev.descriptor = (usb_functional_desc_t *)&dev_setup->dDevice;
+	LIST_ADD(&hid_common.descList, (usb_desc_list_t *)&hid_common.dev);
 
-	hid_common.dev.size = 1;
-	hid_common.dev.descriptors = (usb_functional_desc_t *)&dev_setup->dDevice;
-	hid_common.dev.next = &hid_common.conf;
+	hid_common.conf.descriptor = (usb_functional_desc_t *)&dconfig;
+	LIST_ADD(&hid_common.descList, (usb_desc_list_t *)&hid_common.conf);
 
-	hid_common.conf.size = 1;
-	hid_common.conf.descriptors = (usb_functional_desc_t *)&dconfig;
-	hid_common.conf.next = &hid_common.iface;
+	hid_common.iface.descriptor = (usb_functional_desc_t *)&diface;
+	LIST_ADD(&hid_common.descList, &hid_common.iface);
 
-	hid_common.iface.size = 1;
-	hid_common.iface.descriptors = (usb_functional_desc_t *)&diface;
-	hid_common.iface.next = &hid_common.hid;
+	hid_common.hid.descriptor = (usb_functional_desc_t *)&dhid;
+	LIST_ADD(&hid_common.descList, &hid_common.hid);
 
-	hid_common.hid.size = 1;
-	hid_common.hid.descriptors = (usb_functional_desc_t *)&dhid;
-	hid_common.hid.next = &hid_common.ep;
+	hid_common.ep.descriptor = (usb_functional_desc_t *)&dep;
+	LIST_ADD(&hid_common.descList, &hid_common.ep);
 
-	hid_common.ep.size = 1;
-	hid_common.ep.descriptors = (usb_functional_desc_t *)&dep;
-	hid_common.ep.next = &hid_common.str0;
+	hid_common.str0.descriptor = (usb_functional_desc_t *)&dstr0;
+	LIST_ADD(&hid_common.descList, &hid_common.str0);
 
-	hid_common.str0.size = 1;
-	hid_common.str0.descriptors = (usb_functional_desc_t *)&dstr0;
-	hid_common.str0.next = &hid_common.strman;
+	hid_common.strman.descriptor = (usb_functional_desc_t *)&dev_setup->dStrMan;
+	LIST_ADD(&hid_common.descList, &hid_common.strman);
 
-	hid_common.strman.size = 1;
-	hid_common.strman.descriptors = (usb_functional_desc_t *)&dev_setup->dStrMan;
-	hid_common.strman.next = &hid_common.strprod;
+	hid_common.strprod.descriptor = (usb_functional_desc_t *)&dev_setup->dStrProd;
+	LIST_ADD(&hid_common.descList, &hid_common.strprod);
 
-	hid_common.strprod.size = 1;
-	hid_common.strprod.descriptors = (usb_functional_desc_t *)&dev_setup->dStrProd;
-	hid_common.strprod.next = &hid_common.hidreport;
+	hid_common.hidreport.descriptor = (usb_functional_desc_t *)&dhidreport;
+	LIST_ADD(&hid_common.descList, &hid_common.hidreport);
 
-	hid_common.hidreport.size = 1;
-	hid_common.hidreport.descriptors = (usb_functional_desc_t *)&dhidreport;
 	hid_common.hidreport.next = NULL;
 
-	hid_common.config.endpoint_list = endpoints;
-	hid_common.config.descriptors_head = &hid_common.dev;
-
-	if ((res = usbclient_init(&hid_common.config)) != EOK)
+	if ((res = usbclient_init(hid_common.descList)) != EOK)
 		return res;
 
-	return EOK;
+	return res;
 }

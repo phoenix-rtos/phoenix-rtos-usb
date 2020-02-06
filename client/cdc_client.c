@@ -15,12 +15,14 @@
 #include <errno.h>
 #include <stdio.h>
 
+#include <sys/list.h>
+
 #include <usbclient.h>
 
 #include "cdc_client.h"
 
 struct {
-	usb_conf_t config;
+	usb_desc_list_t *descList;
 
 	usb_desc_list_t dev;
 	usb_desc_list_t conf;
@@ -75,8 +77,8 @@ static const usb_desc_cdc_union_t dUnion = { .bLength = 5, .bType = USB_DESC_TYP
 
 
 /* Communication Interrupt Endpoint IN */
-static const usb_endpoint_desc_t dComEp = { .bLength = 7, .bDescriptorType = USB_DESC_ENDPOINT, .bEndpointAddress = 0x83	, /* direction IN */
-	.bmAttributes = 0x03, .wMaxPacketSize = 16, .bInterval = 0x08
+static const usb_endpoint_desc_t dComEp = { .bLength = 7, .bDescriptorType = USB_DESC_ENDPOINT, .bEndpointAddress = 0x81	, /* direction IN */
+	.bmAttributes = 0x03, .wMaxPacketSize = 0x20, .bInterval = 0x08
 };
 
 
@@ -87,7 +89,7 @@ static const usb_interface_desc_t dDataIntf = { .bLength = 9, .bDescriptorType =
 
 
 /* Data Bulk Endpoint OUT */
-static const usb_endpoint_desc_t depOUT = { .bLength = 7, .bDescriptorType = USB_DESC_ENDPOINT, .bEndpointAddress = 0x01, /* direction OUT */
+static const usb_endpoint_desc_t depOUT = { .bLength = 7, .bDescriptorType = USB_DESC_ENDPOINT, .bEndpointAddress = 0x02, /* direction OUT */
 	.bmAttributes = 0x02, .wMaxPacketSize = 0x0200, .bInterval = 0
 };
 
@@ -121,15 +123,15 @@ static const usb_string_desc_t dstrprod = {
 };
 
 
-int cdc_recv(char *data, unsigned int len)
+int cdc_recv(int endpt, char *data, unsigned int len)
 {
-	return usbclient_receive(&cdc_common.config.endpoint_list.endpoints[2], data, len);
+	return usbclient_receive(endpt, data, len);
 }
 
 
-int cdc_send(const char *data, unsigned int len)
+int cdc_send(int endpt, const char *data, unsigned int len)
 {
-	return usbclient_send(&cdc_common.config.endpoint_list.endpoints[2], data, len);
+	return usbclient_send(endpt, data, len);
 }
 
 
@@ -141,79 +143,54 @@ void cdc_destroy(void)
 
 int cdc_init(void)
 {
-	int res;
+	int res = EOK;
 
-	usb_endpoint_list_t endpoints = {
-		.size = 3,
-		.endpoints = {
-			{ .id = 0, .type = USB_ENDPT_TYPE_CONTROL, .direction = 0 },
-			{ .id = 1, .type = USB_ENDPT_TYPE_INTR, .direction = USB_ENDPT_DIR_IN },
-			{ .id = 2, .type = USB_ENDPT_TYPE_BULK, .direction = USB_ENDPT_DIR_IN },
-			{ .id = 3, .type = USB_ENDPT_TYPE_BULK, .direction = USB_ENDPT_DIR_OUT }
-		}
-	};
+	cdc_common.dev.descriptor = (usb_functional_desc_t *)&ddev;
+	LIST_ADD(&cdc_common.descList, &cdc_common.dev);
 
-	cdc_common.dev.size = 1;
-	cdc_common.dev.descriptors = (usb_functional_desc_t *)&ddev;
-	cdc_common.dev.next = &cdc_common.conf;
+	cdc_common.conf.descriptor = (usb_functional_desc_t *)&dconfig;
+	LIST_ADD(&cdc_common.descList, &cdc_common.conf);
 
-	cdc_common.conf.size = 1;
-	cdc_common.conf.descriptors = (usb_functional_desc_t *)&dconfig;
-	cdc_common.conf.next = &cdc_common.comIface;
+	cdc_common.comIface.descriptor = (usb_functional_desc_t *)&dComIntf;
+	LIST_ADD(&cdc_common.descList, &cdc_common.comIface);
 
-	cdc_common.comIface.size = 1;
-	cdc_common.comIface.descriptors = (usb_functional_desc_t *)&dComIntf;
-	cdc_common.comIface.next = &cdc_common.header;
+	cdc_common.header.descriptor = (usb_functional_desc_t *)&dHeader;
+	LIST_ADD(&cdc_common.descList, &cdc_common.header);
 
-	cdc_common.header.size = 1;
-	cdc_common.header.descriptors = (usb_functional_desc_t *)&dHeader;
-	cdc_common.header.next = &cdc_common.call;
+	cdc_common.call.descriptor = (usb_functional_desc_t *)&dCall;
+	LIST_ADD(&cdc_common.descList, &cdc_common.call);
 
-	cdc_common.call.size = 1;
-	cdc_common.call.descriptors = (usb_functional_desc_t *)&dCall;
-	cdc_common.call.next = &cdc_common.acm;
+	cdc_common.acm.descriptor = (usb_functional_desc_t *)&dAcm;
+	LIST_ADD(&cdc_common.descList, &cdc_common.acm);
 
-	cdc_common.acm.size = 1;
-	cdc_common.acm.descriptors = (usb_functional_desc_t *)&dAcm;
-	cdc_common.acm.next = &cdc_common.unio;
+	cdc_common.unio.descriptor = (usb_functional_desc_t *)&dUnion;
+	LIST_ADD(&cdc_common.descList, &cdc_common.unio);
 
-	cdc_common.unio.size = 1;
-	cdc_common.unio.descriptors = (usb_functional_desc_t *)&dComEp;
-	cdc_common.unio.next = &cdc_common.comEp;
+	cdc_common.comEp.descriptor = (usb_functional_desc_t *)&dComEp;
+	LIST_ADD(&cdc_common.descList, &cdc_common.comEp);
 
-	cdc_common.comEp.size = 1;
-	cdc_common.comEp.descriptors = (usb_functional_desc_t *)&dUnion;
-	cdc_common.comEp.next = &cdc_common.dataIface;
+	cdc_common.dataIface.descriptor = (usb_functional_desc_t *)&dDataIntf;
+	LIST_ADD(&cdc_common.descList, &cdc_common.dataIface);
 
-	cdc_common.dataIface.size = 1;
-	cdc_common.dataIface.descriptors = (usb_functional_desc_t *)&dDataIntf;
-	cdc_common.dataIface.next = &cdc_common.dataEpOUT;
+	cdc_common.dataEpOUT.descriptor = (usb_functional_desc_t *)&depOUT;
+	LIST_ADD(&cdc_common.descList, &cdc_common.dataEpOUT);
 
-	cdc_common.dataEpOUT.size = 1;
-	cdc_common.dataEpOUT.descriptors = (usb_functional_desc_t *)&depOUT;
-	cdc_common.dataEpOUT.next = &cdc_common.dataEpIN;
+	cdc_common.dataEpIN.descriptor = (usb_functional_desc_t *)&depIN;
+	LIST_ADD(&cdc_common.descList, &cdc_common.dataEpIN);
 
-	cdc_common.dataEpIN.size = 1;
-	cdc_common.dataEpIN.descriptors = (usb_functional_desc_t *)&depIN;
-	cdc_common.dataEpIN.next = &cdc_common.str0;
+	cdc_common.str0.descriptor = (usb_functional_desc_t *)&dstr0;
+	LIST_ADD(&cdc_common.descList, &cdc_common.str0);
 
-	cdc_common.str0.size = 1;
-	cdc_common.str0.descriptors = (usb_functional_desc_t *)&dstr0;
-	cdc_common.str0.next = &cdc_common.strman;
+	cdc_common.strman.descriptor = (usb_functional_desc_t *)&dstrman;
+	LIST_ADD(&cdc_common.descList, &cdc_common.strman);
 
-	cdc_common.strman.size = 1;
-	cdc_common.strman.descriptors = (usb_functional_desc_t *)&dstrman;
-	cdc_common.strman.next = &cdc_common.strprod;
+	cdc_common.strprod.descriptor = (usb_functional_desc_t *)&dstrprod;
+	LIST_ADD(&cdc_common.descList, &cdc_common.strprod);
 
-	cdc_common.strprod.size = 1;
-	cdc_common.strprod.descriptors = (usb_functional_desc_t *)&dstrprod;
 	cdc_common.strprod.next = NULL;
 
-	cdc_common.config.endpoint_list = endpoints;
-	cdc_common.config.descriptors_head = &cdc_common.dev;
-
-	if ((res = usbclient_init(&cdc_common.config)) != EOK)
+	if ((res = usbclient_init(cdc_common.descList)) != EOK)
 		return res;
 
-	return EOK;
+	return res;
 }
