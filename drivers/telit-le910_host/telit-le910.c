@@ -25,6 +25,7 @@
 #include <sys/file.h>
 #include <sys/msg.h>
 #include <sys/list.h>
+#include <sys/stat.h>
 #include <syslog.h>
 #include <poll.h>
 #include <errno.h>
@@ -71,9 +72,10 @@ typedef union {
 	} __attribute__((packed)) w;
 } gpiodata_t;
 
-#define TRACE(x, ...) fprintf(stderr, "telit: " x "\n", ##__VA_ARGS__)
+#define TRACE(x, ...) //fprintf(stderr, "telit: " x "\n", ##__VA_ARGS__)
+//#define TRACE_FAIL(x, ...) fprintf(stderr, "telit fail: " x "\n", ##__VA_ARGS__)
 #define TRACE_FAIL(x, ...) syslog(LOG_WARNING, x, ##__VA_ARGS__)
-#define FUN_TRACE  fprintf(stderr, "telit trace: %s\n", __PRETTY_FUNCTION__)
+#define FUN_TRACE  //fprintf(stderr, "telit trace: %s\n", __PRETTY_FUNCTION__)
 
 #define TELIT_ID_VENDOR 0x1BC7
 #define TELIT_ID_PRODUCT 0x36
@@ -93,7 +95,6 @@ typedef struct {
 
 
 typedef struct _ttyacm_t {
-	uint32_t port;
 	int id;
 
 	int bulk_interface, intr_interface;
@@ -117,7 +118,7 @@ static struct {
 
 	int state;
 	int device_id;
-	uint32_t port, monitor_port;
+	int port;
 	usb_configuration_desc_t *conf_descriptor;
 	usb_device_desc_t dev_descriptor;
 
@@ -175,14 +176,6 @@ int _telit_read(ttyacm_t *acm, char *data, size_t size)
 }
 
 
-static void telit_reqRespond(request_t *req)
-{
-	FUN_TRACE;
-	msgRespond(req->acm->port, &req->msg, req->rid);
-	free(req);
-}
-
-
 static void telit_msgThread(void *arg)
 {
 	FUN_TRACE;
@@ -191,8 +184,14 @@ static void telit_msgThread(void *arg)
 	request_t *req = NULL;
 	msg_t *msg;
 	int id = 0;
+	int error;
+
+	request_t req_stack;
+	req = &req_stack;
+	msg = &req->msg;
 
 	for (;;) {
+#if 0
 		if (req == NULL) {
 			req = calloc(1, sizeof(request_t));
 
@@ -204,90 +203,73 @@ static void telit_msgThread(void *arg)
 
 			msg = &req->msg;
 		}
-
 		memset(msg, 0, sizeof(msg_t));
+#endif
 
-		if (msgRecv(port, msg, &req->rid) < 0)
+
+		if (msgRecv(port, &req->msg, &req->rid) < 0)
 			continue;
 
-		switch (msg->type) {
-		case mtOpen:
-		case mtClose:
-			id = msg->i.openclose.oid.id;
-			break;
-
-		case mtRead:
-		case mtWrite:
-			id = msg->i.io.oid.id;
-			break;
-
-		case mtGetAttr:
-			id = msg->i.attr.oid.id;
-			break;
-		}
-
+		id = msg->object;
 		req->acm = acm = telit_common.data + id;
 
-		switch (msg->type) {
-		case mtOpen:
-		case mtClose:
-			msg->o.io.err = EOK;
-			break;
-
-		case mtWrite:
-			if (id < 0 || id > sizeof(telit_common.data) / sizeof(telit_common.data[0])) {
-				msg->o.io.err = -EINVAL;
-				break;
-			}
-
-			mutexLock(acm->lock);
-			msg->o.io.err = _telit_write(acm, msg->i.data, msg->i.size);
-			mutexUnlock(acm->lock);
-			break;
-
-		case mtRead:
-			if (id < 0 || id > sizeof(telit_common.data) / sizeof(telit_common.data[0])) {
-				msg->o.io.err = -EINVAL;
-				break;
-			}
-
-			if (!msg->o.size)
+		if (id < 0 || id > sizeof(telit_common.data) / sizeof(telit_common.data[0])) {
+			error = -ENXIO;
+		}
+		else {
+			error = EOK;
+			switch (msg->type) {
+			case mtOpen:
+				msg->o.open = id;
+				/* fallthrough */
+			case mtClose:
 				break;
 
-			mutexLock(acm->lock);
-			if ((msg->o.io.err = _telit_read(acm, msg->o.data, msg->o.size)) == 0) {
-				if (msg->i.io.mode & O_NONBLOCK) {
-					msg->o.io.err = -EWOULDBLOCK;
+			case mtWrite:
+				mutexLock(acm->lock);
+				if ((msg->o.io = _telit_write(acm, msg->i.data, msg->i.size)) < 0) {
+					error = msg->o.io;
+					msg->o.io = 0;
+				}
+				mutexUnlock(acm->lock);
+				break;
+
+			case mtRead:
+				if (!msg->o.size) {
+					msg->o.io = 0;
+					break;
+				}
+
+				mutexLock(acm->lock);
+				if ((msg->o.io = _telit_read(acm, msg->o.data, msg->o.size)) < 0) {
+					error = msg->o.io;
+					msg->o.io = 0;
+				}
+				else if (msg->o.io == 0) {
+					error = -EAGAIN;
+				}
+				mutexUnlock(acm->lock);
+				break;
+
+			case mtGetAttr:
+				mutexLock(acm->lock);
+				if (msg->i.attr == atEvents) {
+					*(int *)msg->o.data = fifo_is_empty(acm->fifo) ? POLLOUT : POLLOUT | POLLIN;
 				}
 				else {
-					LIST_ADD(&acm->readers, req);
-					req = NULL;
+					error = -EINVAL;
 				}
-			}
-			mutexUnlock(acm->lock);
-			break;
+				mutexUnlock(acm->lock);
 
-		case mtGetAttr:
-			if (id < 0 || id > sizeof(telit_common.data) / sizeof(telit_common.data[0])) {
-				msg->o.attr.val = -EINVAL;
+				break;
+
+			default:
+				error = -EINVAL;
 				break;
 			}
-
-			mutexLock(acm->lock);
-			if (msg->i.attr.type == atPollStatus)
-				msg->o.attr.val = fifo_is_empty(acm->fifo) ? POLLOUT : POLLOUT | POLLIN;
-			else
-				msg->o.attr.val = -EINVAL;
-			mutexUnlock(acm->lock);
-
-			break;
-
-		default:
-			break;
 		}
 
-		if (req != NULL)
-			msgRespond(port, msg, req->rid);
+		msgRespond(port, error, msg, req->rid);
 	}
 }
 
@@ -602,28 +584,6 @@ static void clear_halt(usb_endpoint_desc_t ep)
 }
 
 
-void telit_readThread(void *_acm)
-{
-	FUN_TRACE;
-	ttyacm_t *acm = _acm;
-	request_t *req;
-
-	mutexLock(acm->lock);
-	for (;;) {
-		while ((req = acm->readers) == NULL || fifo_is_empty(acm->fifo))
-			condWait(acm->cond, acm->lock, 0);
-
-		if ((req->msg.o.io.err = _telit_read(acm, req->msg.o.data, req->msg.o.size))) {
-			LIST_REMOVE(&acm->readers, req);
-			telit_reqRespond(req);
-		}
-		else {
-			TRACE_FAIL("no read in read thread");
-		}
-	}
-}
-
-
 void _telit_input(ttyacm_t *acm, char *data, size_t size, int err)
 {
 	FUN_TRACE;
@@ -644,6 +604,7 @@ void _telit_input(ttyacm_t *acm, char *data, size_t size, int err)
 			TRACE_FAIL("RX fifo overflow");
 	}
 	condBroadcast(acm->cond);
+	portEvent(telit_common.port, acm->id, POLLIN|POLLOUT);
 }
 
 
@@ -775,6 +736,22 @@ void telit_init_powerkey(void)
 	platformctl(&set_mux);
 	platformctl(&set_pad);
 
+	int port5 = open("/dev/gpio5/port", O_WRONLY);
+	int dir5 = open("/dev/gpio5/dir", O_WRONLY);
+
+	if (port5 < 0 || dir5 < 0) {
+		TRACE_FAIL("open gpio5");
+		close(port5);
+		close(dir5);
+		exit(EXIT_FAILURE);
+	}
+
+	write(dir5, &set_dir, sizeof(set_dir));
+	set_value.w.val = 0;
+	TRACE("pwrkey set 0");
+	write(port5, &set_value, sizeof(set_value));
+
+#if 0
 	lookup("/dev/gpio5/port", NULL, &gpio5_port);
 	lookup("/dev/gpio5/dir", NULL, &gpio5_dir);
 
@@ -792,13 +769,16 @@ void telit_init_powerkey(void)
 	TRACE("pwrkey set 0");
 	set_value.w.val = 0;
 	msgSend(gpio5_port.port, &msg);
-
+#endif
 	/* Sleep a minimum of 10 seconds. */
 	sleep(14);
 
-	TRACE("ppwrkey set 1");
 	set_value.w.val = 1 << 9;
-	msgSend(gpio5_port.port, &msg);
+	TRACE("pwrkey set 1");
+	write(port5, &set_value, sizeof(set_value));
+
+	close(port5);
+	close(dir5);
 
 	/* Sleep a minimum of 200 ms. */
 	sleep(1);
@@ -861,8 +841,6 @@ int telit_init(void)
 
 	ret |= condCreate(&telit_common.cond);
 	ret |= mutexCreate(&telit_common.lock);
-	ret |= portCreate(&telit_common.data[0].port);
-	telit_common.data[2].port = telit_common.data[1].port = telit_common.data[0].port;
 	telit_common.state = TELIT_STATE_REMOVED;
 
 	telit_common.resetting = 0;
@@ -913,7 +891,24 @@ int usb_connect(void)
 
 int main(int argc, char **argv)
 {
-	oid_t oid;
+
+	int port = portCreate(0);
+
+	if (port < 0) {
+		TRACE_FAIL("create port");
+		exit(EXIT_FAILURE);
+	}
+
+	telit_common.port = port;
+	telit_common.state = TELIT_STATE_REMOVED;
+
+	create_dev(port, 0, "/dev/ttyacm0", S_IFCHR | 0640);
+	create_dev(port, 1, "/dev/ttyacm1", S_IFCHR | 0640);
+	create_dev(port, 2, "/dev/ttyacm2", S_IFCHR | 0640);
+
+	if (fork())
+		_exit(EXIT_SUCCESS);
+	setsid();
 
 	TRACE("Started gsm, log 1");
 	openlog("gsm", LOG_CONS, LOG_DAEMON);
@@ -948,21 +943,12 @@ int main(int argc, char **argv)
 	beginthread(telit_resubmitThread, 4, malloc(0x4000), 0x4000, telit_common.data + 1);
 	beginthread(telit_resubmitThread, 4, malloc(0x4000), 0x4000, telit_common.data + 2);
 
-	beginthread(telit_readThread, 4, malloc(0x4000), 0x4000, telit_common.data);
-	beginthread(telit_readThread, 4, malloc(0x4000), 0x4000, telit_common.data + 1);
-	beginthread(telit_readThread, 4, malloc(0x4000), 0x4000, telit_common.data + 2);
-
-	oid = (oid_t){ .port = telit_common.data[0].port, .id = 0 };
-	create_dev(&oid, "ttyacm0");
-
-	oid = (oid_t){ .port = telit_common.data[0].port, .id = 1 };
-	create_dev(&oid, "ttyacm1");
-
-	oid = (oid_t){ .port = telit_common.data[0].port, .id = 2 };
-	create_dev(&oid, "ttyacm2");
+	// beginthread(telit_readThread, 4, malloc(0x4000), 0x4000, telit_common.data);
+	// beginthread(telit_readThread, 4, malloc(0x4000), 0x4000, telit_common.data + 1);
+	// beginthread(telit_readThread, 4, malloc(0x4000), 0x4000, telit_common.data + 2);
 
 	printf("telit-le910: initialized\n");
-	telit_msgThread((void *)telit_common.data[0].port);
+	telit_msgThread(port);
 
 	return 0;
 }

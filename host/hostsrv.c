@@ -18,6 +18,7 @@
 #include <sys/list.h>
 #include <sys/rb.h>
 #include <sys/msg.h>
+#include <sys/stat.h>
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -45,7 +46,7 @@ pid_t telit = 0;
 typedef struct {
 	rbnode_t linkage;
 	unsigned pid;
-	unsigned port;
+	int port;
 	usb_device_id_t filter;
 	struct usb_device *devices;
 } usb_driver_t;
@@ -346,7 +347,7 @@ int hostsrv_submitUrb(int pid, usb_urb_t *urb, void *inbuf, void *outbuf)
 	}
 
 	if (urb->transfer_size) {
-		buffer = mmap(NULL, (urb->transfer_size + _PAGE_SIZE - 1) & ~(_PAGE_SIZE - 1), PROT_WRITE | PROT_READ, MAP_ANONYMOUS | MAP_UNCACHED, OID_NULL, 0);
+		buffer = mmap(NULL, (urb->transfer_size + _PAGE_SIZE - 1) & ~(_PAGE_SIZE - 1), PROT_WRITE | PROT_READ, MAP_ANONYMOUS | MAP_UNCACHED, -1, 0);
 
 		if (buffer == MAP_FAILED) {
 			TRACE("no mem");
@@ -484,7 +485,7 @@ void hostsrv_signalDetach(usb_device_t *device)
 		return;
 	}
 
-	msg.type = mtDevCtl;
+	msg.type = mtRaw;
 
 	event = (void *)msg.i.raw;
 	event->type = usb_event_removal;
@@ -507,7 +508,7 @@ void hostsrv_signalDriver(usb_transfer_t *transfer)
 		return;
 	}
 
-	msg.type = mtDevCtl;
+	msg.type = mtRaw;
 
 	event = (void *)msg.i.raw;
 	event->type = usb_event_completion;
@@ -704,7 +705,7 @@ int hostsrv_connectDriver(usb_driver_t *driver, usb_device_t *device, usb_config
 	usb_insertion_t *insertion = &event->insertion;
 
 	memset(&msg, 0, sizeof(msg));
-	msg.type = mtDevCtl;
+	msg.type = mtRaw;
 	msg.i.data = configuration;
 	msg.i.size = configuration->wTotalLength;
 
@@ -831,7 +832,7 @@ int hostsrv_deviceAttach(void)
 
 	if ((driver = hostsrv_findDriver(dev)) != NULL) {
 		TRACE("got driver");
-		configuration = mmap(NULL, _PAGE_SIZE, PROT_WRITE | PROT_READ, MAP_ANONYMOUS | MAP_UNCACHED, OID_NULL, 0);
+		configuration = mmap(NULL, _PAGE_SIZE, PROT_WRITE | PROT_READ, MAP_ANONYMOUS | MAP_UNCACHED, -1, 0);
 		hostsrv_getConfiguration(dev, configuration, _PAGE_SIZE);
 		if (hostsrv_connectDriver(driver, dev, configuration) < 0) {
 			LIST_ADD(&hostsrv_common.orphan_devices, dev);
@@ -935,7 +936,7 @@ int hostsrv_connect(usb_connect_t *c, unsigned pid)
 	if (driver == NULL)
 		return -ENOMEM;
 
-	driver->port = c->port;
+	driver->port = portGet(c->port);
 	driver->filter = c->filter;
 	driver->pid = pid;
 	driver->devices = NULL;
@@ -943,7 +944,7 @@ int hostsrv_connect(usb_connect_t *c, unsigned pid)
 	lib_rbInsert(&hostsrv_common.drivers, &driver->linkage);
 
 	if (hostsrv_common.orphan_devices != NULL) {
-		configuration = mmap(NULL, _PAGE_SIZE, PROT_WRITE | PROT_READ, MAP_ANONYMOUS | MAP_UNCACHED, OID_NULL, 0);
+		configuration = mmap(NULL, _PAGE_SIZE, PROT_WRITE | PROT_READ, MAP_ANONYMOUS | MAP_UNCACHED, -1, 0);
 
 		if (configuration == MAP_FAILED)
 			return -ENOMEM;
@@ -1005,41 +1006,43 @@ void msgthr(void *arg)
 	unsigned rid;
 	msg_t msg;
 	usb_msg_t *umsg;
-
+	int error;
 
 	for (;;) {
 		if (msgRecv(port, &msg, &rid) < 0)
 			continue;
 
 		mutexLock(hostsrv_common.common_lock);
-		if (msg.type == mtDevCtl) {
+		if (msg.type == mtRaw) {
 			umsg = (void *)msg.i.raw;
 
+			error = EOK;
 			switch (umsg->type) {
 			case usb_msg_connect:
-				msg.o.io.err = hostsrv_connect(&umsg->connect, msg.pid);
+				msg.o.io = hostsrv_connect(&umsg->connect, msg.pid);
 				break;
 			case usb_msg_urb:
-				msg.o.io.err = hostsrv_submitUrb(msg.pid, &umsg->urb, msg.i.data, msg.o.data);
+				msg.o.io = hostsrv_submitUrb(msg.pid, &umsg->urb, msg.i.data, msg.o.data);
 				break;
 			case usb_msg_open:
-				msg.o.io.err = hostsrv_open(&umsg->open, &msg);
+				msg.o.io = hostsrv_open(&umsg->open, &msg);
 				break;
 			case usb_msg_reset:
-				msg.o.io.err = hostsrv_submitReset(umsg->reset.device_id);
+				msg.o.io = hostsrv_submitReset(umsg->reset.device_id);
 				break;
 			default:
 				TRACE_FAIL("unsupported usb_msg type");
+				error = -EINVAL;
 				break;
 			}
 		}
 		else {
 			TRACE_FAIL("unsupported msg type");
-			msg.o.io.err = -EINVAL;
+			error = -ENOTSUP;
 		}
 		mutexUnlock(hostsrv_common.common_lock);
 
-		msgRespond(port, &msg, rid);
+		msgRespond(port, error, &msg, rid);
 	}
 }
 
@@ -1061,8 +1064,17 @@ int hostsrv_driverCmp(rbnode_t *n1, rbnode_t *n2)
 int main(int argc, char **argv)
 {
 	FUN_TRACE;
-	oid_t oid;
-	portCreate(&hostsrv_common.port);
+
+	if ((hostsrv_common.port = portCreate(365)) < 0) {
+		debug("usb host: could not create port\n");
+		exit(-1);
+	}
+
+	create_dev(hostsrv_common.port, 0, "/dev/usb", S_IFCHR | 0640);
+
+	if (fork())
+		_exit(0);
+	setsid();
 
 	mutexCreate(&hostsrv_common.common_lock);
 	condCreate(&hostsrv_common.port_cond);
@@ -1080,9 +1092,6 @@ int main(int argc, char **argv)
 
 	ehci_init(hostsrv_eventCallback, hostsrv_common.common_lock);
 
-	oid.port = hostsrv_common.port;
-	oid.id = 0;
-	create_dev(&oid, "/dev/usb");
 
 	beginthread(hostsrv_portthr, 4, malloc(0x4000), 0x4000, NULL);
 	beginthread(hostsrv_signalThread, 4, malloc(0x4000), 0x4000, NULL);

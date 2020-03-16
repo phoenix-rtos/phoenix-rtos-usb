@@ -33,8 +33,8 @@ static struct {
 	hostproxy_event_cb event_cb;
 	handle_t cond;
 	handle_t lock;
-	uint32_t hostsrv_port;
-	uint32_t port;
+	int hostsrv_port;
+	int port;
 	int state;
 } hostproxy_common;
 
@@ -62,7 +62,7 @@ void hostproxy_event_loop(void *arg)
 		if (hostproxy_common.event_cb != NULL)
 			hostproxy_common.event_cb((usb_event_t *)&msg.i.raw, msg.i.data, msg.i.size);
 
-		msgRespond(hostproxy_common.port, &msg, rid);
+		msgRespond(hostproxy_common.port, EOK, &msg, rid);
 	}
 	hostproxy_common.state &= ~HOSTPROXY_CONNECTED;
 	mutexUnlock(hostproxy_common.lock);
@@ -77,12 +77,15 @@ int hostproxy_init(void)
 	int ret = 0;
 	oid_t oid;
 
-	while (lookup(USB_HANDLE, NULL, &oid) < 0)
+//	while (lookup(USB_HANDLE, NULL, &oid) < 0)
+//		usleep(1000000);
+
+	while ((hostproxy_common.hostsrv_port = portGet(365)) < 0)
 		usleep(1000000);
 
-	hostproxy_common.hostsrv_port = oid.port;
+	if ((hostproxy_common.port = portGet(357)) < 0)
+		hostproxy_common.port = portCreate(357);
 
-	ret |= portCreate(&hostproxy_common.port);
 	ret |= condCreate(&hostproxy_common.cond);
 	ret |= mutexCreate(&hostproxy_common.lock);
 
@@ -101,11 +104,11 @@ int hostproxy_connect(usb_device_id_t *deviceId, hostproxy_event_cb event_cb)
 {
 	msg_t msg = { 0 };
 
-	msg.type = mtDevCtl;
+	msg.type = mtRaw;
 	usb_msg_t *usb_msg = (usb_msg_t *)&msg.i.raw;
 	usb_msg->type = usb_msg_connect;
 
-	usb_msg->connect.port = hostproxy_common.port;
+	usb_msg->connect.port = 357; // hostproxy_common.port;
 	memcpy(&usb_msg->connect.filter, deviceId, sizeof(usb_device_id_t));
 
 	hostproxy_common.event_cb = event_cb;
@@ -121,7 +124,7 @@ int hostproxy_open(usb_open_t *open)
 	msg_t msg = { 0 };
 	int ret = 0;
 
-	msg.type = mtDevCtl;
+	msg.type = mtRaw;
 	usb_msg_t *usb_msg = (usb_msg_t *)&msg.i.raw;
 	usb_msg->type = usb_msg_open;
 
@@ -131,7 +134,7 @@ int hostproxy_open(usb_open_t *open)
 	if (ret)
 		return ret;
 
-	return msg.o.io.err;
+	return msg.o.io;
 }
 
 
@@ -140,7 +143,7 @@ int hostproxy_open_(int device, usb_endpoint_desc_t endpoint)
 	msg_t msg = { 0 };
 	int ret = 0;
 
-	msg.type = mtDevCtl;
+	msg.type = mtRaw;
 	usb_msg_t *usb_msg = (usb_msg_t *)&msg.i.raw;
 	usb_msg->type = usb_msg_open;
 	usb_msg->open.device_id = device;
@@ -149,7 +152,7 @@ int hostproxy_open_(int device, usb_endpoint_desc_t endpoint)
 	if ((ret = msgSend(hostproxy_common.hostsrv_port, &msg)))
 		return ret;
 
-	return msg.o.io.err;
+	return msg.o.io;
 }
 
 
@@ -159,7 +162,7 @@ int hostproxy_write(usb_urb_t *urb, void *data, size_t size)
 	msg_t msg = { 0 };
 	int ret = 0;
 
-	msg.type = mtDevCtl;
+	msg.type = mtRaw;
 	usb_msg_t *usb_msg = (usb_msg_t *)msg.i.raw;
 	usb_msg->type = usb_msg_urb;
 	urb->transfer_size = size;
@@ -174,7 +177,7 @@ int hostproxy_write(usb_urb_t *urb, void *data, size_t size)
 	if (ret)
 		return ret;
 
-	return msg.o.io.err;
+	return msg.o.io;
 }
 
 
@@ -183,7 +186,7 @@ int hostproxy_read(usb_urb_t *urb, void *data, size_t size)
 	msg_t msg = { 0 };
 	int ret = 0;
 
-	msg.type = mtDevCtl;
+	msg.type = mtRaw;
 	usb_msg_t *usb_msg = (usb_msg_t *)msg.i.raw;
 	usb_msg->type = usb_msg_urb;
 	urb->direction = usb_transfer_in;
@@ -200,7 +203,7 @@ int hostproxy_read(usb_urb_t *urb, void *data, size_t size)
 	if (ret)
 		return ret;
 
-	return msg.o.io.err;
+	return msg.o.io;
 }
 
 
@@ -209,7 +212,7 @@ int hostproxy_reset(int deviceId)
 	msg_t msg = { 0 };
 	int ret = 0;
 
-	msg.type = mtDevCtl;
+	msg.type = mtRaw;
 	usb_msg_t *usb_msg = (usb_msg_t *)msg.i.raw;
 	usb_msg->type = usb_msg_reset;
 	usb_msg->reset.device_id = deviceId;
@@ -219,7 +222,7 @@ int hostproxy_reset(int deviceId)
 	if (ret)
 		return ret;
 
-	return msg.o.io.err;
+	return msg.o.io;
 }
 
 
