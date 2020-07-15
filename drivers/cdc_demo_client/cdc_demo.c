@@ -15,6 +15,7 @@
 #include <errno.h>
 #include <stdio.h>
 #include <string.h>
+#include <unistd.h>
 
 #include <sys/platform.h>
 #include <phoenix/arch/imxrt.h>
@@ -50,15 +51,6 @@ static void cdc_enabelCache(unsigned char enable)
 }
 
 
-static void cdc_fillBuff(void)
-{
-	int i;
-
-	for (i = 0; i < BUFF_SIZE; i++)
-		client_common.buff[i] = 'A' + i % ('Z' - 'A');
-}
-
-
 int main(int argc, char **argv)
 {
 	sleep(1);
@@ -72,7 +64,9 @@ int main(int argc, char **argv)
 	}
 
 #if CDC_MODE == SENDING_MODE
-	cdc_fillBuff();
+	int i;
+	for (i = 0; i < BUFF_SIZE; i++)
+		client_common.buff[i] = 'A' + i % ('Z' - 'A');
 
 	LOG("SENDING MODE initialized.");
 	while (1)
