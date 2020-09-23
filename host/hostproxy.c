@@ -45,7 +45,7 @@ static char event_loop_stack[4096] __attribute__((aligned(8)));
 void hostproxy_event_loop(void *arg)
 {
 	msg_t msg;
-	unsigned int rid;
+	unsigned long int rid;
 
 	mutexLock(hostproxy_common.lock);
 	while (hostproxy_common.state & HOSTPROXY_RUNNING) {

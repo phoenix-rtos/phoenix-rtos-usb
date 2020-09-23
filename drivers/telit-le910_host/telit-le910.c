@@ -85,7 +85,7 @@ typedef struct {
 	void *next, *prev;
 
 	msg_t msg;
-	unsigned rid;
+	unsigned long rid;
 
 	struct _ttyacm_t *acm;
 	usb_urb_t urb;

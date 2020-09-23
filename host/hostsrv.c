@@ -1002,7 +1002,7 @@ int hostsrv_open(usb_open_t *o, msg_t *msg)
 void msgthr(void *arg)
 {
 	unsigned port = (int)arg;
-	unsigned rid;
+	unsigned long rid;
 	msg_t msg;
 	usb_msg_t *umsg;
 
