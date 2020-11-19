@@ -38,5 +38,5 @@ ifneq ($(T1),)
 $(T1):
 	@echo >/dev/null
 else
-	include _targets/Makefile.$(TARGET)
+	include _targets/Makefile.$(TARGET_FAMILY)-$(TARGET_SUBFAMILY)
 endif
