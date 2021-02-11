@@ -39,22 +39,9 @@ struct {
 } client_common;
 
 
-static void cdc_enabelCache(unsigned char enable)
-{
-	platformctl_t pctl;
-
-	pctl.action = pctl_set;
-	pctl.type = pctl_devcache;
-	pctl.devcache.state = !!enable;
-
-	platformctl(&pctl);
-}
-
-
 int main(int argc, char **argv)
 {
 	sleep(1);
-	cdc_enabelCache(0);
 
 	LOG("started.");
 
@@ -62,6 +49,8 @@ int main(int argc, char **argv)
 		LOG_ERROR("couldn't initialize CDC transport.");
 		return -1;
 	}
+
+	LOG("initialized.");
 
 #if CDC_MODE == SENDING_MODE
 	int i;
