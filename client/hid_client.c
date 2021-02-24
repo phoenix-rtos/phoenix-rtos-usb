@@ -30,10 +30,10 @@ struct {
 	usb_desc_list_t ep;
 
 	usb_desc_list_t str0;
-	usb_desc_list_t strman;
-	usb_desc_list_t strprod;
+	usb_desc_list_t strMan;
+	usb_desc_list_t strProd;
 
-	usb_desc_list_t hidreport;
+	usb_desc_list_t hidReport;
 } hid_common;
 
 
@@ -56,7 +56,7 @@ static const usb_hid_desc_report_t dHidReport = {
 static const usb_endpoint_desc_t dEp = {
 	.bLength = 7,
 	.bDescriptorType = USB_DESC_ENDPOINT,
-	.bEndpointAddress = 0x81, /* direction IN */
+	.bEndpointAddress = 0x80 | HID_ENDPT_IRQ, /* direction IN */
 	.bmAttributes = 0x03,
 	.wMaxPacketSize = 64,
 	.bInterval = 0x01
@@ -110,6 +110,30 @@ static const usb_string_desc_t dStr0 = {
 };
 
 
+static int hid_classSetup(const usb_setup_packet_t *setup, void *buf, unsigned int len, void *ctxUser)
+{
+	switch (setup->bRequest) {
+		case CLASS_REQ_SET_IDLE:
+			/* reply with ACK */
+			return CLASS_SETUP_ACK;
+
+		case CLASS_REQ_SET_REPORT:
+			/* notify endpoint that data is ready */
+			return CLASS_SETUP_ENDP0;
+
+		case CLASS_REQ_GET_IDLE:
+		case CLASS_REQ_GET_PROTOCOL:
+		case CLASS_REQ_GET_REPORT:
+		case CLASS_REQ_SET_PROTOCOL:
+		default:
+			/* not handled */
+			return CLASS_SETUP_NOACTION;
+	}
+
+	/* never reached */
+}
+
+
 int hid_init(const usb_hid_dev_setup_t *dev_setup)
 {
 	hid_common.descList = NULL;
@@ -132,16 +156,18 @@ int hid_init(const usb_hid_dev_setup_t *dev_setup)
 	hid_common.str0.descriptor = (usb_functional_desc_t *)&dStr0;
 	LIST_ADD(&hid_common.descList, &hid_common.str0);
 
-	hid_common.strman.descriptor = (usb_functional_desc_t *)&dev_setup->dStrMan;
-	LIST_ADD(&hid_common.descList, &hid_common.strman);
+	hid_common.strMan.descriptor = (usb_functional_desc_t *)&dev_setup->dStrMan;
+	LIST_ADD(&hid_common.descList, &hid_common.strMan);
 
-	hid_common.strprod.descriptor = (usb_functional_desc_t *)&dev_setup->dStrProd;
-	LIST_ADD(&hid_common.descList, &hid_common.strprod);
+	hid_common.strProd.descriptor = (usb_functional_desc_t *)&dev_setup->dStrProd;
+	LIST_ADD(&hid_common.descList, &hid_common.strProd);
 
-	hid_common.hidreport.descriptor = (usb_functional_desc_t *)&dHidReport;
-	LIST_ADD(&hid_common.descList, &hid_common.hidreport);
+	hid_common.hidReport.descriptor = (usb_functional_desc_t *)&dHidReport;
+	LIST_ADD(&hid_common.descList, &hid_common.hidReport);
 
-	hid_common.hidreport.next = NULL;
+	hid_common.hidReport.next = NULL;
+
+	usbclient_setClassCallback(hid_classSetup);
 
 	return usbclient_init(hid_common.descList);
 }
@@ -154,7 +180,7 @@ void hid_destroy(void)
 }
 
 
-int hid_send(int endpt, const char *data, unsigned int len)
+int hid_send(int endpt, const void *data, unsigned int len)
 {
 	if (hid_common.descList != NULL)
 		return usbclient_send(endpt, data, len);
@@ -163,7 +189,7 @@ int hid_send(int endpt, const char *data, unsigned int len)
 }
 
 
-int hid_recv(int endpt, char *data, unsigned int len)
+int hid_recv(int endpt, void *data, unsigned int len)
 {
 	if (hid_common.descList != NULL)
 		return usbclient_receive(endpt, data, len);

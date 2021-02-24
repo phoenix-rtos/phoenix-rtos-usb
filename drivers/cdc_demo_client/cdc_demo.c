@@ -27,7 +27,6 @@
 
 #define CDC_MODE RCV_MODE
 
-#define ENDPOINT_BULK 2
 #define BUFF_SIZE 0x1000
 
 #define LOG(str, ...) do { if (1) fprintf(stderr, "cdc-client: " str "\n", ##__VA_ARGS__); } while (0)
@@ -45,7 +44,7 @@ int main(int argc, char **argv)
 
 	LOG("started.");
 
-	if (cdc_init()) {
+	if (cdc_init(NULL, NULL)) {
 		LOG_ERROR("couldn't initialize CDC transport.");
 		return -1;
 	}
@@ -59,7 +58,7 @@ int main(int argc, char **argv)
 
 	LOG("SENDING MODE initialized.");
 	while (1)
-		cdc_send(ENDPOINT_BULK, (char *)client_common.buff, BUFF_SIZE);
+		cdc_send(CDC_ENDPT_BULK, (char *)client_common.buff, BUFF_SIZE);
 #elif CDC_MODE == RCV_MODE
 	LOG("RCV MODE initialized.");
 
