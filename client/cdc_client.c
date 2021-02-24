@@ -14,10 +14,10 @@
 
 #include <errno.h>
 #include <stdio.h>
+#include <string.h>
 #include <sys/list.h>
 #include <usbclient.h>
 #include "cdc_client.h"
-
 
 struct {
 	usb_desc_list_t *descList;
@@ -37,8 +37,13 @@ struct {
 	usb_desc_list_t dataEpIN;
 
 	usb_desc_list_t str0;
-	usb_desc_list_t strman;
-	usb_desc_list_t strprod;
+	usb_desc_list_t strMan;
+	usb_desc_list_t strProd;
+
+	usb_cdc_line_coding_t lineCoding;
+
+	void *ctxUser;
+	void (*cbEvent)(int, void *);
 } cdc_common;
 
 
@@ -129,7 +134,7 @@ static const usb_desc_cdc_union_t dUnion = {
 static const usb_endpoint_desc_t dComEp = {
 	.bLength = 7,
 	.bDescriptorType = USB_DESC_ENDPOINT,
-	.bEndpointAddress = 0x81, /* direction IN */
+	.bEndpointAddress = 0x80 | CDC_ENDPT_IRQ, /* direction IN */
 	.bmAttributes = 0x03,
 	.wMaxPacketSize = 0x20,
 	.bInterval = 0x08
@@ -154,7 +159,7 @@ static const usb_interface_desc_t dDataIface = {
 static const usb_endpoint_desc_t dEpOUT = {
 	.bLength = 7,
 	.bDescriptorType = USB_DESC_ENDPOINT,
-	.bEndpointAddress = 0x02, /* direction OUT */
+	.bEndpointAddress = 0x00 | CDC_ENDPT_BULK, /* direction OUT */
 	.bmAttributes = 0x02,
 	.wMaxPacketSize = 0x0200,
 	.bInterval = 0
@@ -165,7 +170,7 @@ static const usb_endpoint_desc_t dEpOUT = {
 static const usb_endpoint_desc_t dEpIN = {
 	.bLength = 7,
 	.bDescriptorType = USB_DESC_ENDPOINT,
-	.bEndpointAddress = 0x82, /* direction IN */
+	.bEndpointAddress = 0x80 | CDC_ENDPT_BULK, /* direction IN */
 	.bmAttributes = 0x02,
 	.wMaxPacketSize = 0x0200,
 	.bInterval = 1
@@ -196,9 +201,79 @@ static const usb_string_desc_t dStrProd = {
 };
 
 
-int cdc_init(void)
+static int cdc_classSetup(const usb_setup_packet_t *setup, void *buf, unsigned int len, void *ctxUser)
+{
+	switch (setup->bRequest) {
+		case CLASS_REQ_SET_LINE_CODING:
+			/* receive lineCoding set request from host */
+			memcpy(&cdc_common.lineCoding, buf, sizeof(usb_cdc_line_coding_t));
+			if (cdc_common.cbEvent)
+				cdc_common.cbEvent(CDC_EV_LINECODING, ctxUser);
+
+			/* send ACK */
+			return CLASS_SETUP_ACK;
+
+		case CLASS_REQ_GET_LINE_CODING:
+			memcpy(buf, &cdc_common.lineCoding, sizeof(usb_cdc_line_coding_t));
+
+			/* send lineCoding response to host */
+			return sizeof(usb_cdc_line_coding_t);
+
+		case CLASS_REQ_SET_CONTROL_LINE_STATE:
+			if (cdc_common.cbEvent) {
+				if (setup->wValue & 0x3)
+					cdc_common.cbEvent(CDC_EV_CARRIER_ACTIVATE, ctxUser);
+				else
+					cdc_common.cbEvent(CDC_EV_CARRIER_DEACTIVATE, ctxUser);
+			}
+
+			/* send ACK */
+			return CLASS_SETUP_ACK;
+
+		default:
+			/* not handled */
+			return CLASS_SETUP_NOACTION;
+	}
+
+	/* never reached */
+}
+
+
+static void cdc_eventNotify(int evType, void *ctxUser)
+{
+	if (!cdc_common.cbEvent)
+		return;
+
+	switch (evType) {
+		case USBCLIENT_EV_CONNECT:
+			cdc_common.cbEvent(CDC_EV_CONNECT, ctxUser);
+			return;
+
+		case USBCLIENT_EV_DISCONNECT:
+			cdc_common.cbEvent(CDC_EV_DISCONNECT, ctxUser);
+			return;
+
+		case USBCLIENT_EV_INIT:
+			cdc_common.cbEvent(CDC_EV_INIT, ctxUser);
+			return;
+
+		case USBCLIENT_EV_RESET:
+			cdc_common.cbEvent(CDC_EV_RESET, ctxUser);
+			return;
+
+		case USBCLIENT_EV_CONFIGURED:
+		default:
+			return;
+	}
+}
+
+
+int cdc_init(void (*cbEvent)(int, void *), void *ctxUser)
 {
 	cdc_common.descList = NULL;
+
+	cdc_common.cbEvent = cbEvent;
+	cdc_common.ctxUser = ctxUser;
 
 	cdc_common.dev.descriptor = (usb_functional_desc_t *)&dDev;
 	LIST_ADD(&cdc_common.descList, &cdc_common.dev);
@@ -236,13 +311,25 @@ int cdc_init(void)
 	cdc_common.str0.descriptor = (usb_functional_desc_t *)&dStr0;
 	LIST_ADD(&cdc_common.descList, &cdc_common.str0);
 
-	cdc_common.strman.descriptor = (usb_functional_desc_t *)&dStrMan;
-	LIST_ADD(&cdc_common.descList, &cdc_common.strman);
+	cdc_common.strMan.descriptor = (usb_functional_desc_t *)&dStrMan;
+	LIST_ADD(&cdc_common.descList, &cdc_common.strMan);
 
-	cdc_common.strprod.descriptor = (usb_functional_desc_t *)&dStrProd;
-	LIST_ADD(&cdc_common.descList, &cdc_common.strprod);
+	cdc_common.strProd.descriptor = (usb_functional_desc_t *)&dStrProd;
+	LIST_ADD(&cdc_common.descList, &cdc_common.strProd);
 
-	cdc_common.strprod.next = NULL;
+	cdc_common.strProd.next = NULL;
+
+	/*
+	 * Default COM configuration as 115200 bps, 8-bit data width, 1 bit stop bit, no-parity
+	 */
+	cdc_common.lineCoding.dwDTERate = 115200;
+	cdc_common.lineCoding.bCharFormat = 0;
+	cdc_common.lineCoding.bParityType = 0;
+	cdc_common.lineCoding.bDataBits = 8;
+
+	usbclient_setUserContext(ctxUser);
+	usbclient_setEventCallback(cdc_eventNotify);
+	usbclient_setClassCallback(cdc_classSetup);
 
 	return usbclient_init(cdc_common.descList);
 }
@@ -255,7 +342,7 @@ void cdc_destroy(void)
 }
 
 
-int cdc_send(int endpt, const char *data, unsigned int len)
+int cdc_send(int endpt, const void *data, unsigned int len)
 {
 	if (cdc_common.descList != NULL)
 		return usbclient_send(endpt, data, len);
@@ -264,10 +351,22 @@ int cdc_send(int endpt, const char *data, unsigned int len)
 }
 
 
-int cdc_recv(int endpt, char *data, unsigned int len)
+int cdc_recv(int endpt, void *data, unsigned int len)
 {
 	if (cdc_common.descList != NULL)
 		return usbclient_receive(endpt, data, len);
 	else
 		return -ENXIO;
+}
+
+
+usb_cdc_line_coding_t cdc_getLineCoding(void)
+{
+	return cdc_common.lineCoding;
+}
+
+
+void cdc_setLineCoding(usb_cdc_line_coding_t lineCoding)
+{
+	cdc_common.lineCoding = lineCoding;
 }
