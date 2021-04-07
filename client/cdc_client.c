@@ -172,11 +172,11 @@ static const usb_endpoint_desc_t dEpIN = {
 };
 
 
-/* String Data: Manufacturer */
+/* String Data: Manufacturer = "Phoenix Systems" */
 static const usb_string_desc_t dStrMan = {
 	.bLength = 2 * 15 + 2,
 	.bDescriptorType = USB_DESC_STRING,
-	.wData = { 'N', 0, 'X', 0, 'P', 0, ' ', 0, 'S', 0, 'E', 0, 'M', 0, 'I', 0, 'C', 0, 'O', 0, 'N', 0, 'D', 0, 'U', 0, 'C', 0, 'T', 0, 'O', 0, 'R', 0, 'S', 0 }
+	.wData = { 'P', 0, 'h', 0, 'o', 0, 'e', 0, 'n', 0, 'i', 0, 'x', 0, ' ', 0, 'S', 0, 'y', 0, 's', 0, 't', 0, 'e', 0, 'm', 0, 's', 0 }
 };
 
 
@@ -188,11 +188,11 @@ static const usb_string_desc_t dStr0 = {
 };
 
 
-/* String Data: Product */
+/* String Data: Product = "Virtual COM Port" */
 static const usb_string_desc_t dStrProd = {
 	.bLength = 2 * 16 + 2,
 	.bDescriptorType = USB_DESC_STRING,
-	.wData = { 'M', 0, 'C', 0, 'U', 0, ' ', 0, 'V', 0, 'I', 0, 'R', 0, 'T', 0, 'U', 0, 'A', 0, 'L', 0 }
+	.wData = { 'V', 0, 'i', 0, 'r', 0, 't', 0, 'u', 0, 'a', 0, 'l', 0, ' ', 0, 'C', 0, 'O', 0, 'M', 0, ' ', 0, 'P', 0, 'o', 0, 'r', 0, 't', 0 }
 };
 
 
