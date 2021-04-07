@@ -1,7 +1,7 @@
 #
 # Makefile for Phoenix-RTOS hid and cdc API
 #
-# Copyright 2020 Phoenix Systems
+# Copyright 2020-2021 Phoenix Systems
 #
 
 

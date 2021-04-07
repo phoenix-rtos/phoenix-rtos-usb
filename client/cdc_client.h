@@ -21,13 +21,13 @@
 int cdc_init(void);
 
 
-int cdc_recv(int endpt, char *data, unsigned int len);
+void cdc_destroy(void);
 
 
 int cdc_send(int endpt, const char *data, unsigned int len);
 
 
-void cdc_destroy(void);
+int cdc_recv(int endpt, char *data, unsigned int len);
 
 
 #endif

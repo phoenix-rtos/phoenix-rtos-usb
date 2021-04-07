@@ -19,16 +19,16 @@
 #include <hid.h>
 
 
-int hid_send(int endpt, const char *data, unsigned int len);
-
-
-int hid_recv(int endpt, char *data, unsigned int len);
-
-
 int hid_init(const usb_hid_dev_setup_t* dev_setup);
 
 
 void hid_destroy(void);
+
+
+int hid_send(int endpt, const char *data, unsigned int len);
+
+
+int hid_recv(int endpt, char *data, unsigned int len);
 
 
 #endif

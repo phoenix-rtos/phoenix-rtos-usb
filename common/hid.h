@@ -46,4 +46,5 @@ typedef struct _usb_hid_desc_t {
 	uint16_t wDescriptorLength;
 } __attribute__((packed)) usb_hid_desc_t;
 
+
 #endif
