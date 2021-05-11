@@ -9,16 +9,11 @@
 CFLAGS += -DTARGET_IMXRT
 
 ifneq (, $(findstring 117, $(TARGET)))
-	CFLAGS += -DTARGET_IMXRT1170
+  CFLAGS += -DTARGET_IMXRT1170
 else ifneq (, $(findstring 105, $(TARGET)))
-	CFLAGS += -DTARGET_IMXRT1050
+  CFLAGS += -DTARGET_IMXRT1050
 else ifneq (, $(findstring 106, $(TARGET)))
-	CFLAGS += -DTARGET_IMXRT1060
+  CFLAGS += -DTARGET_IMXRT1060
 endif
 
-include common/Makefile
-include client/Makefile
-# include host/Makefile
-# include drivers/telit-le910_host/Makefile
-# include drivers/umass_host/Makefile
-include drivers/cdc_demo_client/Makefile
+DEFAULT_COMPONENTS := common libusbclass cdc-demo

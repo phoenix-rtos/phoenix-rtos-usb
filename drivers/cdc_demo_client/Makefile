@@ -4,8 +4,10 @@
 # Copyright 2020 Phoenix Systems
 #
 
+NAME := cdc-demo
+LOCAL_SRCS := cdc_demo.c
+DEP_LIBS := libusbclass
+DEPS := common
+LIBS := libusbclient
 
-$(PREFIX_PROG)cdc-demo: $(PREFIX_O)drivers/cdc_demo_client/cdc_demo.o $(PREFIX_A)libusbclass.a $(PREFIX_A)libusbclient.a $(PREFIX_A)libusbcdc.a
-	$(LINK)
-
-all: $(PREFIX_PROG_STRIPPED)cdc-demo
+include $(binary.mk)

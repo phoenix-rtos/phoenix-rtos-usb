@@ -4,17 +4,17 @@
 # Copyright 2020 Phoenix Systems
 #
 
+NAME := hostsrv
+LOCAL_SRCS := hostsrv.c
+LOCAL_HEADERS := hostsrv.h
+LIBS := libusbehci
 
-$(PREFIX_A)libhostproxy.a: $(PREFIX_O)host/hostproxy.o
-	$(ARCH)
-	
-$(PREFIX_PROG)hostsrv: $(PREFIX_O)host/hostsrv.o $(PREFIX_A)libusbehci.a
-	$(LINK) 
-	
-$(PREFIX_H)hostproxy.h: host/hostproxy.h
-	$(HEADER)
-	
-$(PREFIX_H)hostsrv.h: host/hostsrv.h
-	$(HEADER)
+include $(binary.mk)
 
-all: $(PREFIX_PROG_STRIPPED)hostsrv $(PREFIX_A)libhostproxy.a $(addprefix $(PREFIX_H), hostproxy.h hostsrv.h)
+
+NAME := libhostproxy
+LOCAL_HEADERS := hostproxy.h
+LOCAL_SRCS := hostproxy.c
+DEPS := hostsrv
+
+include $(static-lib.mk)

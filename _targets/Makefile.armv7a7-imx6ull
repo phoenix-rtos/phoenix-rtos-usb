@@ -6,9 +6,5 @@
 # Copyright 2019 Phoenix Systems
 #
 
-include common/Makefile
-include client/Makefile
-include host/Makefile
-include drivers/telit-le910_host/Makefile
-include drivers/umass_host/Makefile
-include drivers/cdc_demo_client/Makefile
+DEFAULT_COMPONENTS := common libusbclass cdc-demo
+DEFAULT_COMPONENTS += host telit-le910 umass
