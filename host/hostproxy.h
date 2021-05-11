@@ -17,7 +17,7 @@
 #define _HOST_PROXY_H_
 
 
-#include "hostsrv.h"
+#include <hostsrv.h>
 
 
 typedef void (*hostproxy_event_cb)(usb_event_t *event, void *data, size_t size);
