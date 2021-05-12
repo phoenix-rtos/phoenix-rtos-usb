@@ -7,4 +7,4 @@
 #
 
 DEFAULT_COMPONENTS := common libusbclass cdc-demo
-DEFAULT_COMPONENTS += host telit-le910 umass
+DEFAULT_COMPONENTS += hostsrv telit-le910 umass
