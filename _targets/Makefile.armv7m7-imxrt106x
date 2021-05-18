@@ -16,4 +16,4 @@ else ifneq (, $(findstring 106, $(TARGET)))
   CFLAGS += -DTARGET_IMXRT1060
 endif
 
-DEFAULT_COMPONENTS := common libusbclass cdc-demo
+DEFAULT_COMPONENTS := libusb usb
