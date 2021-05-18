@@ -1,20 +1,18 @@
 /*
  * Phoenix-RTOS
  *
- * USB Host Server
+ * USB Host
  *
- * host/hostsrv.h
- *
- * Copyright 2018, 2020 Phoenix Systems
- * Author: Jan Sikorski, Hubert Buczynski
+ * Copyright 2021 Phoenix Systems
+ * Author: Maciej Purski
  *
  * This file is part of Phoenix-RTOS.
  *
  * %LICENSE%
  */
 
-#ifndef _USB_HOST_SERVER_H_
-#define _USB_HOST_SERVER_H_
+#ifndef _USB_HOST_H_
+#define _USB_HOST_H_
 
 #include <usb.h>
 
@@ -94,5 +92,39 @@ typedef struct {
 		usb_completion_t completion;
 	};
 } usb_event_t;
+
+
+/* Internal structures */
+typedef struct {
+	unsigned pid;
+	unsigned port;
+	usb_device_id_t filter;
+	struct usb_device *devices;
+} usb_driver_t;
+
+
+typedef struct usb_endpoint {
+	struct usb_endpoint *next, *prev;
+
+	struct usb_device *device;
+
+	int max_packet_len;
+	int number;
+
+} usb_endpoint_t;
+
+
+typedef struct usb_device {
+	struct usb_device *next, *prev;
+
+	char name[32];
+	usb_driver_t *driver;
+	usb_endpoint_t *endpoints;
+	usb_endpoint_t *control_endpoint;
+
+	usb_device_desc_t *descriptor;
+	char address;
+	int speed;
+} usb_device_t;
 
 #endif
