@@ -38,15 +38,6 @@ typedef struct hcd_ops {
 	int (*urbSubmit)(hcd_t *, usb_urb_t *);
 } hcd_ops_t;
 
-typedef struct hcd {
-	const hcd_info_t *info;
-	const hcd_ops_t *ops;
-	usb_hub_t *roothub;
-
-	volatile int *base, *phybase;
-	void *priv;
-} hcd_t;
-
 typedef struct usb_bus {
 	struct usb_bus *next, *prev;
 
@@ -56,6 +47,17 @@ typedef struct usb_bus {
 	int maxaddr;
 	hcd_t *hcd;
 } usb_bus_t;
+
+typedef struct hcd {
+	const hcd_info_t *info;
+	const hcd_ops_t *ops;
+	usb_hub_t *roothub;
+	usb_bus_t *bus;
+
+	volatile int *base, *phybase;
+	void *priv;
+} hcd_t;
+
 
 
 void hcd_register(hcd_ops_t *ops);

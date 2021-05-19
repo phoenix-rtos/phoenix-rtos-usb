@@ -93,6 +93,14 @@ static usb_bus_t *bus_create(int num)
 }
 
 
+static int dev_addressSet(usb_bus_t *bus, usb_device_t *dev)
+{
+	dev->address = (bus->maxaddr % 255) + 1;
+	bus->maxaddr = dev->address;
+
+	return 0;
+}
+
 static usb_device_t *dev_create(usb_bus_t *bus)
 {
 	usb_device_t *dev;
@@ -102,9 +110,7 @@ static usb_device_t *dev_create(usb_bus_t *bus)
 		return NULL;
 
 	/* TODO: check if address is free */
-	dev->address = (bus->maxaddr % 255) + 1;
-	bus->maxaddr = dev->address;
-	bus->ndevices++;
+	dev->address = 0;
 
 	LIST_ADD(&bus->devices, dev);
 	/* TODO: init other device fields */
@@ -165,6 +171,7 @@ static hcd_t *hcd_create(usb_bus_t *bus, const hcd_ops_t *ops, const hcd_info_t 
 	hcd->ops = ops;
 
 	bus->hcd = hcd;
+	hcd->bus = bus;
 
 	return hcd;
 }
@@ -178,7 +185,7 @@ static int hcd_init(void)
 	usb_bus_t *bus;
 	usb_device_t *dev;
 	usb_hub_t *hub;
-    int nhcd, i;
+	int nhcd, i;
 
 	if ((nhcd = hcd_getInfo(&info)) <= 0) {
 		fprintf(stderr, "usb: No hcd available!\n");
@@ -188,7 +195,7 @@ static int hcd_init(void)
 	for (i = 0; i < nhcd; i++) {
 		if ((ops = hcd_lookup(info[i].type)) == NULL) {
 			fprintf(stderr, "usb: Can't find driver for hcd: %s\n", info);
-            usb_cleanup();
+			usb_cleanup();
 			return -EINVAL;
 		}
 
@@ -231,7 +238,7 @@ static int hcd_init(void)
 		}
 	}
 
-    return 0;
+	return 0;
 }
 
 
@@ -290,30 +297,75 @@ static void usb_msgthr(void *arg)
 	}
 }
 
+static int usb_portCleanFeatures(usb_hub_t *hub, int port, uint32_t change)
+{
+	int i;
+
+	for (i = 0; i < 5; i++) {
+		if (change & (1 << i)) {
+			if (hub->clearPortFeature(hub, port, USB_PORT_FEAT_C_CONNECTION + i) != 0)
+				return -1;
+		}
+	}
+
+	return 0;
+}
+
+static int usb_getDeviceDescriptor(hcd_t *hcd, usb_device_t *dev)
+{
+	/* TODO */
+	return 0;
+}
 
 static void usb_portStatusChanged(usb_hub_t *hub, int port)
 {
 	usb_port_status_t status;
-	int i;
+	usb_device_t *dev;
 
 	if (hub->getPortStatus(hub, port, &status) != 0) {
-		fprintf(stderr, "usb: getPortStatus port %x failed!\n", port);
+		fprintf(stderr, "usb: getPortStatus port %d failed!\n", port);
 		return;
 	}
 
-	/* Clear changed features */
-	for (i = 0; i < 5; i++) {
-		if (status.wPortChange & (1 << i)) {
-			if (hub->clearPortFeature(hub, port, USB_PORT_FEAT_C_CONNECTION + i) != 0) {
-				fprintf(stderr, "usb: clearPortFeature port %x failed!\n", port);
-				return;
-			}
-		}
+	if (usb_portCleanFeatures(hub, port, status.wPortChange) != 0) {
+		fprintf(stderr, "usb: portCleanFeatures failed on port %d!\n", port);
+		return;
 	}
 
 	if (status.wPortChange & USB_PORT_STAT_C_CONNECTION) {
 		if (status.wPortStatus & USB_PORT_STAT_CONNECTION) {
 			/* Device connected */
+			if (hub->setPortFeature(hub, port, USB_PORT_FEAT_RESET) != 0) {
+				fprintf(stderr, "usb: setPortFeature port %d failed!\n", port);
+				return;
+			}
+
+			if (hub->getPortStatus(hub, port, &status) != 0) {
+				fprintf(stderr, "usb: getPortStatus port %d failed!\n", port);
+				return;
+			}
+
+			if ((status.wPortChange & USB_PORT_FEAT_C_RESET) == 0) {
+				fprintf(stderr, "usb: fail to reset port %d!\n", port);
+				return;
+			}
+
+			if (usb_portCleanFeatures(hub, port, status.wPortChange) != 0) {
+				fprintf(stderr, "usb: portCleanFeatures failed on port %d!\n", port);
+				return;
+			}
+
+			/* Reset feature cleaned - begin enumeration */
+			if ((dev = dev_create(hub->hcd->bus)) == NULL) {
+				fprintf(stderr, "usb: fail to create device!\n");
+				return;
+			}
+
+			hub->ports[port - 1].device = dev;
+			usb_getDeviceDescriptor(hub->hcd, dev);
+			dev_addressSet(hub->hcd->bus, dev);
+			/* RESET DEVICE */
+			/* Configure the device */
 		} else {
 			/* Device disconnected */
 		}
@@ -331,7 +383,7 @@ static void usb_enumerator(void *arg)
 		sleep(1);
 		hub = usb_common.hubs;
 		if (hub == NULL)
-			continue;
+			exit(1);
 
 		do {
 			hub->statusChanged(hub, &portmask);
