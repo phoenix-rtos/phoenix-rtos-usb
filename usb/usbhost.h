@@ -14,6 +14,7 @@
 #ifndef _USB_HOST_H_
 #define _USB_HOST_H_
 
+#include <sys/types.h>
 #include <usb.h>
 
 #define USB_CONNECT_WILDCARD ((unsigned)-1)
@@ -104,27 +105,50 @@ typedef struct {
 
 
 typedef struct usb_endpoint {
-	struct usb_endpoint *next, *prev;
-
 	struct usb_device *device;
+	enum { usb_ep_control, usb_ep_interrupt, usb_ep_bulk, usb_ep_isochronous } type;
+	enum { usb_ep_in, usb_ep_out, usb_ep_bi } direction;
 
 	int max_packet_len;
 	int number;
 
+	void *hcdpriv;
 } usb_endpoint_t;
 
 
 typedef struct usb_device {
 	struct usb_device *next, *prev;
 
+	enum { usb_full_speed = 0, usb_low_speed, usb_high_speed } speed;
+	usb_device_desc_t descriptor;
+
 	char name[32];
 	usb_driver_t *driver;
-	usb_endpoint_t *endpoints;
-	usb_endpoint_t *control_endpoint;
+	usb_endpoint_t *ep0;
+	struct hcd *hcd;
 
-	usb_device_desc_t *descriptor;
-	char address;
-	int speed;
+	int address;
 } usb_device_t;
+
+typedef struct usb_transfer {
+	struct usb_transfer *next, *prev;
+	struct usb_endpoint *endpoint;
+	usb_setup_packet_t *setup;
+
+	unsigned async;
+	unsigned id;
+	volatile int finished;
+	volatile int error;
+	volatile int aborted;
+
+	char *buffer;
+	size_t size;
+	int type;
+	int direction;
+
+	void *hcdpriv;
+} usb_transfer_t;
+
+void usb_transferFinished(usb_transfer_t *t);
 
 #endif

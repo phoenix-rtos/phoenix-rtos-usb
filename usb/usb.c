@@ -30,7 +30,8 @@
 #include <unistd.h>
 
 static struct {
-	handle_t common_lock;
+	handle_t common_lock, enumeratorLock;
+	handle_t enumeratorCond;
 	usb_hub_t *hubs;
 	usb_bus_t *buses;
 	hcd_ops_t *hcdOps;
@@ -58,6 +59,75 @@ static int hub_initPorts(usb_hub_t *hub)
 }
 
 
+void usb_transferFinished(usb_transfer_t *t)
+{
+	/* TODO: handle other types of transfers */
+	condSignal(usb_common.enumeratorCond);
+}
+
+
+static int usb_getDescriptor(usb_device_t *dev, int descriptor, int index, char *buffer, int size)
+{
+	usb_setup_packet_t setup = (usb_setup_packet_t) {
+		.bmRequestType = REQUEST_DIR_DEV2HOST | REQUEST_TYPE_STANDARD | REQUEST_RECIPIENT_DEVICE,
+		.bRequest = REQ_GET_DESCRIPTOR,
+		.wValue = descriptor << 8 | index,
+		.wIndex = 0,
+		.wLength = size,
+	};
+	usb_transfer_t t = (usb_transfer_t) {
+		.endpoint = dev->ep0,
+		.type = usb_transfer_control,
+		.direction = usb_transfer_in,
+		.setup = &setup,
+		.buffer = buffer,
+		.size = size
+	};
+
+	if (dev->hcd->ops->transferEnqueue(dev->hcd, &t) != 0)
+		return -1;
+
+	mutexLock(usb_common.enumeratorLock);
+	condWait(usb_common.enumeratorCond, usb_common.enumeratorLock, 0);
+	mutexUnlock(usb_common.enumeratorLock);
+
+	return 0;
+}
+
+
+
+static int usb_setAddress(usb_device_t *dev, int address)
+{
+	usb_setup_packet_t setup = (usb_setup_packet_t) {
+		.bmRequestType = REQUEST_DIR_HOST2DEV | REQUEST_TYPE_STANDARD | REQUEST_RECIPIENT_DEVICE,
+		.bRequest = REQ_SET_ADDRESS,
+		.wValue = address,
+		.wIndex = 0,
+		.wLength = 0
+	};
+	usb_transfer_t t = (usb_transfer_t) {
+		.endpoint = dev->ep0,
+		.type = usb_transfer_control,
+		.direction = usb_transfer_out,
+		.setup = &setup,
+		.buffer = NULL,
+		.size = 0
+	};
+
+	if (dev->hcd->ops->transferEnqueue(dev->hcd, &t) != 0)
+		return -1;
+
+	mutexLock(usb_common.enumeratorLock);
+	condWait(usb_common.enumeratorCond, usb_common.enumeratorLock, 0);
+	mutexUnlock(usb_common.enumeratorLock);
+
+	dev->address = address;
+
+	return 0;
+}
+
+
+
 static void usb_cleanup(void)
 {
 	usb_bus_t *bus = usb_common.buses;
@@ -72,7 +142,7 @@ static void usb_cleanup(void)
 	} while (bus != usb_common.buses);
 }
 
-
+/* TODO: remove bus structure */
 static usb_bus_t *bus_create(int num)
 {
 	usb_bus_t *bus;
@@ -105,17 +175,32 @@ static usb_device_t *dev_create(usb_bus_t *bus)
 {
 	usb_device_t *dev;
 
-	dev = malloc(sizeof(usb_device_t));
-	if (dev == NULL)
+	if ((dev = malloc(sizeof(usb_device_t))) == NULL)
 		return NULL;
 
-	/* TODO: check if address is free */
 	dev->address = 0;
 
+	/* Create control endpoint */
+	if ((dev->ep0 = malloc(sizeof(usb_endpoint_t))) == NULL) {
+		free(dev);
+		return NULL;
+	}
+
+	dev->hcd = bus->hcd;
+	dev->ep0->max_packet_len = 64; /* Default value */
+	dev->ep0->number = 0;
+	dev->ep0->device = dev;
+	dev->ep0->type = usb_ep_control;
+	dev->ep0->direction = usb_ep_bi;
+
 	LIST_ADD(&bus->devices, dev);
-	/* TODO: init other device fields */
 
 	return dev;
+}
+
+static usb_device_t *dev_destroy(usb_device_t *dev)
+{
+
 }
 
 
@@ -168,6 +253,7 @@ static hcd_t *hcd_create(usb_bus_t *bus, const hcd_ops_t *ops, const hcd_info_t 
 
 	hcd->info = info;
 	hcd->priv = NULL;
+	hcd->transfers = NULL;
 	hcd->ops = ops;
 
 	bus->hcd = hcd;
@@ -194,7 +280,7 @@ static int hcd_init(void)
 
 	for (i = 0; i < nhcd; i++) {
 		if ((ops = hcd_lookup(info[i].type)) == NULL) {
-			fprintf(stderr, "usb: Can't find driver for hcd: %s\n", info);
+			fprintf(stderr, "usb: Can't find driver for hcd: %s\n", info->type);
 			usb_cleanup();
 			return -EINVAL;
 		}
@@ -252,7 +338,7 @@ static int usb_devsList(char *buffer, size_t size)
 		dev = bus->devices;
 		do {
 			ret = snprintf(buffer, size, "Bus %03d Device %03d: %s\n",
-						   bus->id, dev->address, dev->name);
+			               bus->id, dev->address, dev->name);
 			buffer += ret;
 			bytes += ret;
 			size -= ret;
@@ -281,15 +367,15 @@ static void usb_msgthr(void *arg)
 
 		mutexLock(usb_common.common_lock);
 		switch (msg.type) {
-		case mtRead:
-			msg.o.io.err = usb_devsList(msg.o.data, msg.o.size);
-			break;
-		case mtDevCtl:
-			umsg = (void *)msg.i.raw;
-			break;
-		default:
-			fprintf(stderr, "usb: unsupported msg type\n");
-			msg.o.io.err = -EINVAL;
+			case mtRead:
+				msg.o.io.err = usb_devsList(msg.o.data, msg.o.size);
+				break;
+			case mtDevCtl:
+				umsg = (void *)msg.i.raw;
+				break;
+			default:
+				fprintf(stderr, "usb: unsupported msg type\n");
+				msg.o.io.err = -EINVAL;
 		}
 		mutexUnlock(usb_common.common_lock);
 
@@ -311,11 +397,69 @@ static int usb_portCleanFeatures(usb_hub_t *hub, int port, uint32_t change)
 	return 0;
 }
 
-static int usb_getDeviceDescriptor(hcd_t *hcd, usb_device_t *dev)
+void usb_dumpDeviceDescriptor(FILE *stream, usb_device_desc_t *descr)
 {
-	/* TODO */
+	fprintf(stream, "DEVICE DESCRIPTOR:\n");
+	fprintf(stream, "\tbLength: %d\n", descr->bLength);
+	fprintf(stream, "\tbDescriptorType: %d\n", descr->bDescriptorType);
+	fprintf(stream, "\tbcdUSB: %d\n", descr->bcdUSB);
+	fprintf(stream, "\tbDeviceClass: %d\n", descr->bDeviceClass);
+	fprintf(stream, "\tbDeviceSubClass: %d\n", descr->bDeviceSubClass);
+	fprintf(stream, "\tbDeviceProtocol: %d\n", descr->bDeviceProtocol);
+	fprintf(stream, "\tbMaxPacketSize0: %d\n", descr->bMaxPacketSize0);
+	fprintf(stream, "\tidVendor: %x\n", descr->idVendor);
+	fprintf(stream, "\tidProduct: %x\n", descr->idProduct);
+	fprintf(stream, "\tbcdDevice: %d\n", descr->bcdDevice);
+	fprintf(stream, "\tiManufacturer: %d\n", descr->iManufacturer);
+	fprintf(stream, "\tiProduct: %d\n", descr->iProduct);
+	fprintf(stream, "\tiSerialNumber: %d\n", descr->iSerialNumber);
+	fprintf(stream, "\tbNumConfigurations: %d\n", descr->bNumConfigurations);
+}
+
+
+static int usb_getDeviceDescriptor(usb_device_t *dev)
+{
+	if (usb_getDescriptor(dev, USB_DESC_DEVICE, 0, (char *)&dev->descriptor, sizeof(usb_device_desc_t)) != 0) {
+		fprintf(stderr, "usb: Fail to get device descriptor\n");
+		return -1;
+	}
+
+	usb_dumpDeviceDescriptor(stderr, &dev->descriptor);
+
 	return 0;
 }
+
+
+static int usb_getConfigurationDescriptor(usb_device_t *dev)
+{
+	usb_configuration_desc_t desc;
+
+	if (usb_getDescriptor(dev, USB_DESC_CONFIG, 0, (char *)&desc, sizeof(desc)) != 0) {
+		fprintf(stderr, "usb: Fail to get device descriptor\n");
+		return -1;
+	}
+
+	return 0;
+}
+
+
+static int usb_portReset(usb_hub_t *hub, int port, usb_port_status_t *status)
+{
+	if (hub->setPortFeature(hub, port, USB_PORT_FEAT_RESET) != 0)
+		return -1;
+
+	if (hub->getPortStatus(hub, port, status) != 0)
+		return -1;
+
+	if ((status->wPortChange & USB_PORT_FEAT_C_RESET) == 0)
+		return -1;
+
+	if (usb_portCleanFeatures(hub, port, status->wPortChange) != 0)
+		return -1;
+
+	return 0;
+}
+
 
 static void usb_portStatusChanged(usb_hub_t *hub, int port)
 {
@@ -335,23 +479,8 @@ static void usb_portStatusChanged(usb_hub_t *hub, int port)
 	if (status.wPortChange & USB_PORT_STAT_C_CONNECTION) {
 		if (status.wPortStatus & USB_PORT_STAT_CONNECTION) {
 			/* Device connected */
-			if (hub->setPortFeature(hub, port, USB_PORT_FEAT_RESET) != 0) {
-				fprintf(stderr, "usb: setPortFeature port %d failed!\n", port);
-				return;
-			}
-
-			if (hub->getPortStatus(hub, port, &status) != 0) {
-				fprintf(stderr, "usb: getPortStatus port %d failed!\n", port);
-				return;
-			}
-
-			if ((status.wPortChange & USB_PORT_FEAT_C_RESET) == 0) {
-				fprintf(stderr, "usb: fail to reset port %d!\n", port);
-				return;
-			}
-
-			if (usb_portCleanFeatures(hub, port, status.wPortChange) != 0) {
-				fprintf(stderr, "usb: portCleanFeatures failed on port %d!\n", port);
+			if (usb_portReset(hub, port, &status) < 0) {
+				fprintf(stderr, "usb: fail to reset port %d\n", port);
 				return;
 			}
 
@@ -361,13 +490,45 @@ static void usb_portStatusChanged(usb_hub_t *hub, int port)
 				return;
 			}
 
+			if (status.wPortStatus & USB_PORT_STAT_HIGH_SPEED)
+				dev->speed = usb_high_speed;
+			else if (status.wPortStatus & USB_PORT_STAT_LOW_SPEED)
+				dev->speed = usb_low_speed;
+			else
+				dev->speed = usb_full_speed;
+
 			hub->ports[port - 1].device = dev;
-			usb_getDeviceDescriptor(hub->hcd, dev);
-			dev_addressSet(hub->hcd->bus, dev);
+
+			if (usb_getDeviceDescriptor(dev) != 0) {
+				fprintf(stderr, "usb: Fail to get device descriptor\n");
+				dev_destroy(dev);
+				return;
+			}
+
+			if (usb_portReset(hub, port, &status) != 0) {
+				fprintf(stderr, "usb: Fail to reset port\n");
+				dev_destroy(dev);
+				return;
+			}
+			dev->ep0->max_packet_len = dev->descriptor.bMaxPacketSize0;
+
+			if (usb_setAddress(dev, 1) != 0) {
+				fprintf(stderr, "usb: Fail to set device address\n");
+				dev_destroy(dev);
+				return;
+			}
+
+			if (usb_getDeviceDescriptor(dev) != 0) {
+				fprintf(stderr, "usb: Fail to get device descriptor\n");
+				dev_destroy(dev);
+				return;
+			}
 			/* RESET DEVICE */
 			/* Configure the device */
 		} else {
 			/* Device disconnected */
+			printf("DEVICE DISCONNTECTED\n");
+			/* device destroy */
 		}
 	}
 }
@@ -408,6 +569,16 @@ int main(int argc, char *argv[])
 	oid_t oid;
 
 	if (mutexCreate(&usb_common.common_lock) != 0) {
+		fprintf(stderr, "usb: Can't create mutex!\n");
+		return -EINVAL;
+	}
+
+	if (mutexCreate(&usb_common.enumeratorLock) != 0) {
+		fprintf(stderr, "usb: Can't create mutex!\n");
+		return -EINVAL;
+	}
+
+	if (condCreate(&usb_common.enumeratorCond) != 0) {
 		fprintf(stderr, "usb: Can't create mutex!\n");
 		return -EINVAL;
 	}
