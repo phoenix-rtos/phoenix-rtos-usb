@@ -35,7 +35,7 @@ typedef struct hcd_ops {
 	const char type[HCD_TYPE_LEN];
 
 	int (*init)(hcd_t *);
-	int (*urbSubmit)(hcd_t *, usb_urb_t *);
+	int (*transferEnqueue)(hcd_t *, usb_transfer_t *);
 } hcd_ops_t;
 
 typedef struct usb_bus {
@@ -54,6 +54,8 @@ typedef struct hcd {
 	usb_hub_t *roothub;
 	usb_bus_t *bus;
 
+	usb_transfer_t *transfers;
+	handle_t transfer_lock;
 	volatile int *base, *phybase;
 	void *priv;
 } hcd_t;
