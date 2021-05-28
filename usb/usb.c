@@ -198,9 +198,13 @@ static usb_device_t *dev_create(usb_bus_t *bus)
 	return dev;
 }
 
+
 static usb_device_t *dev_destroy(usb_device_t *dev)
 {
-
+	dev->hcd->ops->devDestroy(dev->hcd, dev);
+	LIST_REMOVE(&dev->hcd->bus->devices, dev);
+	free(dev->ep0);
+	free(dev);
 }
 
 
@@ -528,7 +532,8 @@ static void usb_portStatusChanged(usb_hub_t *hub, int port)
 		} else {
 			/* Device disconnected */
 			printf("DEVICE DISCONNTECTED\n");
-			/* device destroy */
+			dev = hub->ports[port - 1].device;
+			dev_destroy(dev);
 		}
 	}
 }

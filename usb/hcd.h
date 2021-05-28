@@ -36,6 +36,7 @@ typedef struct hcd_ops {
 
 	int (*init)(hcd_t *);
 	int (*transferEnqueue)(hcd_t *, usb_transfer_t *);
+	void (*devDestroy)(hcd_t *, usb_device_t *);
 } hcd_ops_t;
 
 typedef struct usb_bus {
