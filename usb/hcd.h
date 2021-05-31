@@ -46,13 +46,27 @@ typedef struct hcd {
 
 	uint32_t addrmask[4];
 	usb_transfer_t *transfers;
-	handle_t transfer_lock;
+	handle_t transLock;
 	volatile int *base, *phybase;
 	void *priv;
 } hcd_t;
 
 
-
 void hcd_register(hcd_ops_t *ops);
+
+int hcd_getInfo(const hcd_info_t **info);
+
+int hcd_deviceAdd(hcd_t *hcd, usb_device_t *hub, usb_device_t *dev, int port);
+
+void hcd_deviceRemove(hcd_t *hcd, usb_device_t *hub, int port);
+
+usb_device_t *hcd_deviceCreate(hcd_t *hcd);
+
+void hcd_deviceFree(usb_device_t *dev);
+
+usb_device_t *hcd_deviceCreate(hcd_t *hcd);
+
+hcd_t *hcd_init(void);
+
 
 #endif

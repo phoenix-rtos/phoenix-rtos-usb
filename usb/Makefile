@@ -5,7 +5,7 @@
 #
 
 NAME := usb
-LOCAL_SRCS := usb.c
+LOCAL_SRCS := usb.c hcd.c
 LOCAL_HEADERS := hcd.h hub.h usbhost.h
 LIBS := libusbehci
 
