@@ -27,7 +27,6 @@ typedef struct {
 
 
 typedef struct hcd hcd_t;
-typedef struct usb_hub usb_hub_t;
 
 typedef struct hcd_ops {
 	struct hcd_ops *next, *prev;
@@ -39,22 +38,13 @@ typedef struct hcd_ops {
 	void (*devDestroy)(hcd_t *, usb_device_t *);
 } hcd_ops_t;
 
-typedef struct usb_bus {
-	struct usb_bus *next, *prev;
-
-	int id;
-	usb_device_t *devices;
-	int ndevices;
-	int maxaddr;
-	hcd_t *hcd;
-} usb_bus_t;
-
 typedef struct hcd {
+	struct hcd *prev, *next;
 	const hcd_info_t *info;
 	const hcd_ops_t *ops;
-	usb_hub_t *roothub;
-	usb_bus_t *bus;
+	usb_device_t *roothub;
 
+	uint32_t addrmask[4];
 	usb_transfer_t *transfers;
 	handle_t transfer_lock;
 	volatile int *base, *phybase;

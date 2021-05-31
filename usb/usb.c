@@ -32,32 +32,14 @@
 static struct {
 	handle_t common_lock, enumeratorLock;
 	handle_t enumeratorCond;
-	usb_hub_t *hubs;
-	usb_bus_t *buses;
+	hcd_t *hcds;
 	hcd_ops_t *hcdOps;
-	int nbuses;
+	int nhcd;
 	uint32_t port;
 } usb_common;
 
 
 int hcd_getInfo(const hcd_info_t **info);
-
-static int hub_initPorts(usb_hub_t *hub)
-{
-	int i;
-
-	hub->ports = malloc(sizeof(usb_port_t) * hub->nports);
-	if (hub->ports == NULL)
-		return -ENOMEM;
-
-	for (i = 1; i <= hub->nports; i++) {
-		hub->ports[i].num = i;
-		hub->ports[i].device = NULL;
-	}
-
-	return 0;
-}
-
 
 void usb_transferFinished(usb_transfer_t *t)
 {
@@ -121,57 +103,67 @@ static int usb_setAddress(usb_device_t *dev, int address)
 	condWait(usb_common.enumeratorCond, usb_common.enumeratorLock, 0);
 	mutexUnlock(usb_common.enumeratorLock);
 
-	dev->address = address;
-
 	return 0;
 }
-
 
 
 static void usb_cleanup(void)
 {
-	usb_bus_t *bus = usb_common.buses;
+	hcd_t *hcd = usb_common.hcds;
 
-	if (bus == NULL)
+	if (hcd == NULL)
 		return;
 
-	/* Free all devices, hcd, ops, and bus structures */
+	/* Free all devices, hcd, ops, and hcd structures */
 	do {
 		/* TODO */
-		bus = bus->next;
-	} while (bus != usb_common.buses);
+		hcd = hcd->next;
+	} while (hcd != usb_common.hcds);
 }
 
-/* TODO: remove bus structure */
-static usb_bus_t *bus_create(int num)
+
+static int hcd_addDevice(hcd_t *hcd, usb_device_t *hub, usb_device_t *dev, int port)
 {
-	usb_bus_t *bus;
+	uint32_t b, addr;
+	int i;
 
-	bus = malloc(sizeof(usb_bus_t));
-	if (bus == NULL)
-		return NULL;
+	if (port > hub->ndevices)
+		return -1;
 
-	bus->id = num;
-	bus->ndevices = 0;
-	bus->hcd = NULL;
-	bus->devices = NULL;
-	bus->maxaddr = 0;
+	/* TODO: mutex */
+	for (i = 0, addr = 0; i < 4; i++, addr += 32) {
+		if ((b = __builtin_ffsl(~hcd->addrmask[i])) != 0)
+			break;
+	}
 
-	LIST_ADD(&usb_common.buses, bus);
+	if (b == 0)
+		return -1;
 
-	return bus;
+	addr += b - 1;
+	hcd->addrmask[i] |= 1UL << (b - 1UL);
+
+	hub->devices[port - 1] = dev;
+	dev->hub = hub;
+
+	return addr;
 }
 
-
-static int dev_addressSet(usb_bus_t *bus, usb_device_t *dev)
+static void hcd_removeDevice(hcd_t *hcd, usb_device_t *hub, int port)
 {
-	dev->address = (bus->maxaddr % 255) + 1;
-	bus->maxaddr = dev->address;
+	usb_device_t *dev;
 
-	return 0;
+	printf("Remove device port: %d ndevices:%d\n", port, hub->ndevices);
+	if (port > hub->ndevices)
+		return;
+
+	dev = hub->devices[port - 1];
+	hub->devices[port - 1] = NULL;
+
+	hcd->addrmask[dev->address / 32] &= ~(1UL << (dev->address % 32));
 }
 
-static usb_device_t *dev_create(usb_bus_t *bus)
+
+static usb_device_t *hcd_devCreate(hcd_t *hcd)
 {
 	usb_device_t *dev;
 
@@ -186,41 +178,23 @@ static usb_device_t *dev_create(usb_bus_t *bus)
 		return NULL;
 	}
 
-	dev->hcd = bus->hcd;
+	dev->hcd = hcd;
 	dev->ep0->max_packet_len = 64; /* Default value */
 	dev->ep0->number = 0;
 	dev->ep0->device = dev;
 	dev->ep0->type = usb_ep_control;
 	dev->ep0->direction = usb_ep_bi;
-
-	LIST_ADD(&bus->devices, dev);
+	dev->ep0->hcdpriv = NULL;
 
 	return dev;
 }
 
 
-static usb_device_t *dev_destroy(usb_device_t *dev)
+static void hcd_devFree(usb_device_t *dev)
 {
 	dev->hcd->ops->devDestroy(dev->hcd, dev);
-	LIST_REMOVE(&dev->hcd->bus->devices, dev);
 	free(dev->ep0);
 	free(dev);
-}
-
-
-static usb_hub_t *hub_create(usb_device_t *dev, hcd_t *hcd)
-{
-	usb_hub_t *hub;
-
-	hub = malloc(sizeof(usb_hub_t));
-	if (hub == NULL)
-		return NULL;
-
-	LIST_ADD(&usb_common.hubs, hub);
-	hub->dev = dev;
-	hub->hcd = hcd;
-
-	return hub;
 }
 
 
@@ -247,21 +221,37 @@ static const hcd_ops_t *hcd_lookup(const char *type)
 }
 
 
-static hcd_t *hcd_create(usb_bus_t *bus, const hcd_ops_t *ops, const hcd_info_t *info)
+static hcd_t *hcd_create(const hcd_ops_t *ops, const hcd_info_t *info)
 {
+	usb_device_t *hub;
 	hcd_t *hcd;
 
-	hcd = malloc(sizeof(hcd_t));
-	if (hcd == NULL)
+	if ((hcd = malloc(sizeof(hcd_t))) == NULL)
 		return NULL;
+
+	/* Create root hub */
+	if ((hub = hcd_devCreate(hcd)) == NULL) {
+		free(hcd);
+		return NULL;
+	}
+
+	hcd->roothub = hub;
+	hub->address = 1;
 
 	hcd->info = info;
 	hcd->priv = NULL;
 	hcd->transfers = NULL;
 	hcd->ops = ops;
 
-	bus->hcd = hcd;
-	hcd->bus = bus;
+	/* 0 is reserved for the enumerating device,
+	 * 1 is reserved for the roothub.
+	 */
+	hcd->addrmask[0] = 0x3;
+	hcd->addrmask[1] = 0;
+	hcd->addrmask[2] = 0;
+	hcd->addrmask[3] = 0;
+
+	LIST_ADD(&usb_common.hcds, hcd);
 
 	return hcd;
 }
@@ -271,10 +261,7 @@ static int hcd_init(void)
 {
 	const hcd_info_t *info;
 	const hcd_ops_t *ops;
-	hcd_t *hcd;
-	usb_bus_t *bus;
-	usb_device_t *dev;
-	usb_hub_t *hub;
+	hcd_t *hcd;;
 	int nhcd, i;
 
 	if ((nhcd = hcd_getInfo(&info)) <= 0) {
@@ -289,40 +276,14 @@ static int hcd_init(void)
 			return -EINVAL;
 		}
 
-		if ((bus = bus_create(usb_common.nbuses++)) == NULL) {
-			fprintf(stderr, "usb: Can't create a bus - out of memory!\n");
-			usb_cleanup();
-			return -ENOMEM;
-		}
-
-		if ((hcd = hcd_create(bus, ops, &info[i])) == NULL) {
+		if ((hcd = hcd_create(ops, &info[i])) == NULL) {
 			fprintf(stderr, "usb: Can't create a hcd - out of memory!\n");
 			usb_cleanup();
 			return -ENOMEM;
 		}
 
-		/* Create root hub */
-		if ((dev = dev_create(bus)) == NULL) {
-			fprintf(stderr, "usb: Can't create a hub - out of memory!\n");
-			usb_cleanup();
-			return -ENOMEM;
-		}
-
-		if ((hub = hub_create(dev, hcd)) == NULL) {
-			fprintf(stderr, "usb: Can't create a hub - out of memory!\n");
-			usb_cleanup();
-			return -ENOMEM;
-		}
-		hcd->roothub = hub;
-
 		if (hcd->ops->init(hcd) != 0) {
 			fprintf(stderr, "usb: Error initializing host controller!\n");
-			usb_cleanup();
-			return -EINVAL;
-		}
-
-		if (hub_initPorts(hub) != 0) {
-			fprintf(stderr, "usb: Can't create root hub ports - out of memory!\n");
 			usb_cleanup();
 			return -EINVAL;
 		}
@@ -334,27 +295,27 @@ static int hcd_init(void)
 
 static int usb_devsList(char *buffer, size_t size)
 {
-	usb_bus_t *bus = usb_common.buses;
-	usb_device_t *dev;
-	size_t ret, bytes = 0;
+	// hcd_t *hcd = usb_common.hcds;
+	// usb_device_t *dev;
+	// size_t ret, bytes = 0;
 
-	while (size > 0) {
-		dev = bus->devices;
-		do {
-			ret = snprintf(buffer, size, "Bus %03d Device %03d: %s\n",
-			               bus->id, dev->address, dev->name);
-			buffer += ret;
-			bytes += ret;
-			size -= ret;
-			dev = dev->next;
-		} while (dev != bus->devices && size > 0);
+	// while (size > 0) {
+	// 	dev = hcd->devices;
+	// 	do {
+	// 		ret = snprintf(buffer, size, "Bus %03d Device %03d: %s\n",
+	// 		               hcd->id, dev->address, dev->name);
+	// 		buffer += ret;
+	// 		bytes += ret;
+	// 		size -= ret;
+	// 		dev = dev->next;
+	// 	} while (dev != hcd->devices && size > 0);
 
-		bus = bus->next;
-		if (bus == usb_common.buses)
-			break;
-	}
+	// 	hcd = hcd->next;
+	// 	if (hcd == usb_common.hcd)
+	// 		break;
+	// }
 
-	return bytes;
+	return 0;
 }
 
 
@@ -387,13 +348,13 @@ static void usb_msgthr(void *arg)
 	}
 }
 
-static int usb_portCleanFeatures(usb_hub_t *hub, int port, uint32_t change)
+static int usb_portCleanFeatures(usb_device_t *hub, int port, uint32_t change)
 {
 	int i;
 
 	for (i = 0; i < 5; i++) {
 		if (change & (1 << i)) {
-			if (hub->clearPortFeature(hub, port, USB_PORT_FEAT_C_CONNECTION + i) != 0)
+			if (hub->hubOps->clearPortFeature(hub, port, USB_PORT_FEAT_C_CONNECTION + i) != 0)
 				return -1;
 		}
 	}
@@ -447,12 +408,12 @@ static int usb_getConfigurationDescriptor(usb_device_t *dev)
 }
 
 
-static int usb_portReset(usb_hub_t *hub, int port, usb_port_status_t *status)
+static int usb_portReset(usb_device_t *hub, int port, usb_port_status_t *status)
 {
-	if (hub->setPortFeature(hub, port, USB_PORT_FEAT_RESET) != 0)
+	if (hub->hubOps->setPortFeature(hub, port, USB_PORT_FEAT_RESET) != 0)
 		return -1;
 
-	if (hub->getPortStatus(hub, port, status) != 0)
+	if (hub->hubOps->getPortStatus(hub, port, status) != 0)
 		return -1;
 
 	if ((status->wPortChange & USB_PORT_FEAT_C_RESET) == 0)
@@ -465,12 +426,13 @@ static int usb_portReset(usb_hub_t *hub, int port, usb_port_status_t *status)
 }
 
 
-static void usb_portStatusChanged(usb_hub_t *hub, int port)
+static void usb_portStatusChanged(usb_device_t *hub, int port)
 {
 	usb_port_status_t status;
 	usb_device_t *dev;
+	int addr;
 
-	if (hub->getPortStatus(hub, port, &status) != 0) {
+	if (hub->hubOps->getPortStatus(hub, port, &status) != 0) {
 		fprintf(stderr, "usb: getPortStatus port %d failed!\n", port);
 		return;
 	}
@@ -489,7 +451,7 @@ static void usb_portStatusChanged(usb_hub_t *hub, int port)
 			}
 
 			/* Reset feature cleaned - begin enumeration */
-			if ((dev = dev_create(hub->hcd->bus)) == NULL) {
+			if ((dev = hcd_devCreate(hub->hcd)) == NULL) {
 				fprintf(stderr, "usb: fail to create device!\n");
 				return;
 			}
@@ -501,30 +463,37 @@ static void usb_portStatusChanged(usb_hub_t *hub, int port)
 			else
 				dev->speed = usb_full_speed;
 
-			hub->ports[port - 1].device = dev;
-
 			if (usb_getDeviceDescriptor(dev) != 0) {
 				fprintf(stderr, "usb: Fail to get device descriptor\n");
-				dev_destroy(dev);
+				hcd_devFree(dev);
 				return;
 			}
 
 			if (usb_portReset(hub, port, &status) != 0) {
 				fprintf(stderr, "usb: Fail to reset port\n");
-				dev_destroy(dev);
+				hcd_devFree(dev);
 				return;
 			}
 			dev->ep0->max_packet_len = dev->descriptor.bMaxPacketSize0;
 
-			if (usb_setAddress(dev, 1) != 0) {
-				fprintf(stderr, "usb: Fail to set device address\n");
-				dev_destroy(dev);
+			if ((addr = hcd_addDevice(hub->hcd, hub, dev, port)) < 0) {
+				fprintf(stderr, "usb: Fail to add device to hcd\n");
+				hcd_devFree(dev);
 				return;
 			}
 
+			if (usb_setAddress(dev, addr) != 0) {
+				fprintf(stderr, "usb: Fail to set device address\n");
+				hcd_removeDevice(hub->hcd, hub, port);
+				hcd_devFree(dev);
+				return;
+			}
+
+			dev->address = addr;
 			if (usb_getDeviceDescriptor(dev) != 0) {
 				fprintf(stderr, "usb: Fail to get device descriptor\n");
-				dev_destroy(dev);
+				hcd_removeDevice(hub->hcd, hub, port);
+				hcd_devFree(dev);
 				return;
 			}
 			/* RESET DEVICE */
@@ -532,8 +501,10 @@ static void usb_portStatusChanged(usb_hub_t *hub, int port)
 		} else {
 			/* Device disconnected */
 			printf("DEVICE DISCONNTECTED\n");
-			dev = hub->ports[port - 1].device;
-			dev_destroy(dev);
+			dev = hub->devices[port - 1];
+			hcd_removeDevice(hub->hcd, hub, port);
+			/* TODO: change names to the same sequence */
+			hcd_devFree(dev);
 		}
 	}
 }
@@ -541,21 +512,20 @@ static void usb_portStatusChanged(usb_hub_t *hub, int port)
 
 static void usb_enumerator(void *arg)
 {
-	usb_hub_t *hub;
+	hcd_t *hcd;
+	usb_device_t *hub;
 	uint32_t portmask = 0;
 	int n;
 
 	for (;;) {
 		sleep(1);
-		hub = usb_common.hubs;
-		if (hub == NULL)
-			exit(1);
-
+		hcd = usb_common.hcds;
+		hub = hcd->roothub;
 		do {
-			hub->statusChanged(hub, &portmask);
+			hub->hubOps->statusChanged(hub, &portmask);
 			if (portmask > 1) {
 				/* Port status changed */
-				for (n = 1; n <= hub->nports; n++) {
+				for (n = 1; n <= hub->ndevices; n++) {
 					if (portmask & (1 << n))
 						usb_portStatusChanged(hub, n);
 				}
@@ -563,8 +533,8 @@ static void usb_enumerator(void *arg)
 			else if (portmask == 1) {
 				/* Hub status changed */
 			}
-			hub = hub->next;
-		} while (hub != usb_common.hubs);
+			hcd = hcd->next;
+		} while (hcd != usb_common.hcds);
 	}
 }
 
