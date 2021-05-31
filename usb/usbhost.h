@@ -117,8 +117,6 @@ typedef struct usb_endpoint {
 
 
 typedef struct usb_device {
-	struct usb_device *next, *prev;
-
 	enum { usb_full_speed = 0, usb_low_speed, usb_high_speed } speed;
 	usb_device_desc_t descriptor;
 
@@ -126,6 +124,11 @@ typedef struct usb_device {
 	usb_driver_t *driver;
 	usb_endpoint_t *ep0;
 	struct hcd *hcd;
+
+	struct usb_device **devices;
+	struct usb_device *hub;
+	int ndevices;
+	struct usb_hub_ops *hubOps;
 
 	int address;
 } usb_device_t;

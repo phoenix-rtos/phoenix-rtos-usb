@@ -58,25 +58,12 @@ typedef struct usb_port_status {
 	uint16_t wPortChange;
 } __attribute__ ((packed)) usb_port_status_t;
 
-typedef struct usb_port {
-	usb_device_t *device;
-	int num;
-} usb_port_t;
 
-
-typedef struct usb_hub {
-	struct usb_hub *prev, *next;
-
-	usb_device_t *dev;
-	int nports;
-	usb_port_t *ports;
-	hcd_t *hcd;
-	handle_t lock;
-
-	int (*statusChanged)(struct usb_hub *hub, uint32_t *status);
-	int (*getPortStatus)(struct usb_hub *hub, int port, usb_port_status_t *status);
-	int (*clearPortFeature)(struct usb_hub *hub, int port, uint16_t wValue);
-	int (*setPortFeature)(struct usb_hub *hub, int port, uint16_t wValue);
-} usb_hub_t;
+typedef struct usb_hub_ops {
+	int (*statusChanged)(struct usb_device *dev, uint32_t *status);
+	int (*getPortStatus)(struct usb_device *dev, int port, usb_port_status_t *status);
+	int (*clearPortFeature)(struct usb_device *dev, int port, uint16_t wValue);
+	int (*setPortFeature)(struct usb_device *dev, int port, uint16_t wValue);
+} usb_hub_ops_t;
 
 #endif
