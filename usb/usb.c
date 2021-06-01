@@ -45,23 +45,83 @@ void usb_transferFinished(usb_transfer_t *t)
 }
 
 
+static void usb_epConf(usb_device_t *dev, usb_endpoint_t *ep, usb_endpoint_desc_t *desc)
+{
+	ep->device = dev;
+	ep->number = desc->bEndpointAddress & 0xF;
+	ep->direction = (desc->bEndpointAddress & 0x80) ? usb_ep_in : usb_ep_out;
+	ep->max_packet_len = desc->wMaxPacketSize;
+	ep->type = desc->bmAttributes & 0x3;
+	ep->interval = desc->bInterval;
+	ep->hcdpriv = NULL;
+}
+
 static void usb_dumpDeviceDescriptor(FILE *stream, usb_device_desc_t *descr)
 {
 	fprintf(stream, "DEVICE DESCRIPTOR:\n");
 	fprintf(stream, "\tbLength: %d\n", descr->bLength);
-	fprintf(stream, "\tbDescriptorType: %d\n", descr->bDescriptorType);
+	fprintf(stream, "\tbDescriptorType: 0x%x\n", descr->bDescriptorType);
 	fprintf(stream, "\tbcdUSB: %d\n", descr->bcdUSB);
 	fprintf(stream, "\tbDeviceClass: %d\n", descr->bDeviceClass);
 	fprintf(stream, "\tbDeviceSubClass: %d\n", descr->bDeviceSubClass);
 	fprintf(stream, "\tbDeviceProtocol: %d\n", descr->bDeviceProtocol);
 	fprintf(stream, "\tbMaxPacketSize0: %d\n", descr->bMaxPacketSize0);
-	fprintf(stream, "\tidVendor: %x\n", descr->idVendor);
-	fprintf(stream, "\tidProduct: %x\n", descr->idProduct);
+	fprintf(stream, "\tidVendor: 0x%x\n", descr->idVendor);
+	fprintf(stream, "\tidProduct: 0x%x\n", descr->idProduct);
 	fprintf(stream, "\tbcdDevice: %d\n", descr->bcdDevice);
 	fprintf(stream, "\tiManufacturer: %d\n", descr->iManufacturer);
 	fprintf(stream, "\tiProduct: %d\n", descr->iProduct);
 	fprintf(stream, "\tiSerialNumber: %d\n", descr->iSerialNumber);
 	fprintf(stream, "\tbNumConfigurations: %d\n", descr->bNumConfigurations);
+}
+
+
+static void usb_dumpConfigurationDescriptor(FILE *stream, usb_configuration_desc_t *descr)
+{
+	fprintf(stream, "CONFIGURATION DESCRIPTOR:\n");
+	fprintf(stream, "\tbLength: %d\n", descr->bLength);
+	fprintf(stream, "\tbDescriptorType: 0x%x\n", descr->bDescriptorType);
+	fprintf(stream, "\twTotalLength: %d\n", descr->wTotalLength);
+	fprintf(stream, "\tbNumInterfaces: %d\n", descr->bNumInterfaces);
+	fprintf(stream, "\tbConfigurationValue: %d\n", descr->bConfigurationValue);
+	fprintf(stream, "\tiConfiguration %d\n", descr->iConfiguration);
+	fprintf(stream, "\tbmAttributes: 0x%x\n", descr->bmAttributes);
+	fprintf(stream, "\tbMaxPower: %d\n", descr->bMaxPower);
+}
+
+
+static void usb_dumpInferfaceDesc(FILE *stream, usb_interface_desc_t *descr)
+{
+	fprintf(stream, "INTERFACE DESCRIPTOR:\n");
+	fprintf(stream, "\tbLength: %d\n", descr->bLength);
+	fprintf(stream, "\tbDescriptorType: 0x%x\n", descr->bDescriptorType);
+	fprintf(stream, "\tbInterfaceNumber: %d\n", descr->bInterfaceNumber);
+	fprintf(stream, "\tbNumEndpoints: %d\n", descr->bNumEndpoints);
+	fprintf(stream, "\tbInterfaceClass: %x\n", descr->bInterfaceClass);
+	fprintf(stream, "\tbInterfaceSubClass: 0x%x\n", descr->bInterfaceSubClass);
+	fprintf(stream, "\tbInterfaceProtocol: 0x%x\n", descr->bInterfaceProtocol);
+	fprintf(stream, "\tiInterface: %d\n", descr->iInterface);
+}
+
+
+static void usb_dumpEndpointDesc(FILE *stream, usb_endpoint_desc_t *descr)
+{
+	fprintf(stream, "ENDPOINT DESCRIPTOR:\n");
+	fprintf(stream, "\tbLength: %d\n", descr->bLength);
+	fprintf(stream, "\tbDescriptorType: 0x%x\n", descr->bDescriptorType);
+	fprintf(stream, "\tbEndpointAddress: %d\n", descr->bEndpointAddress);
+	fprintf(stream, "\tbmAttributes: 0x%x\n", descr->bmAttributes);
+	fprintf(stream, "\twMaxPacketSize: %d\n", descr->wMaxPacketSize);
+	fprintf(stream, "\tbInterval: %d\n", descr->bInterval);
+}
+
+
+static void usb_dumpStringDesc(FILE *stream, usb_string_desc_t *descr)
+{
+	fprintf(stream, "STRING DESCRIPTOR:\n");
+	fprintf(stream, "\tbLength: %d\n", descr->bLength);
+	fprintf(stream, "\tbDescriptorType: 0x%x\n", descr->bDescriptorType);
+	fprintf(stream, "\twData: %.*s\n", descr->bLength - 2,  descr->wData);
 }
 
 
@@ -71,7 +131,7 @@ static int usb_getDescriptor(usb_device_t *dev, int descriptor, int index, char 
 		.bmRequestType = REQUEST_DIR_DEV2HOST | REQUEST_TYPE_STANDARD | REQUEST_RECIPIENT_DEVICE,
 		.bRequest = REQ_GET_DESCRIPTOR,
 		.wValue = descriptor << 8 | index,
-		.wIndex = 0,
+		.wIndex = (descriptor == USB_DESC_STRING) ? dev->langId : 0,
 		.wLength = size,
 	};
 	usb_transfer_t t = (usb_transfer_t) {
@@ -92,7 +152,6 @@ static int usb_getDescriptor(usb_device_t *dev, int descriptor, int index, char 
 
 	return 0;
 }
-
 
 
 static int usb_setAddress(usb_device_t *dev, int address)
@@ -126,25 +185,141 @@ static int usb_setAddress(usb_device_t *dev, int address)
 
 static int usb_getDeviceDescriptor(usb_device_t *dev)
 {
-	if (usb_getDescriptor(dev, USB_DESC_DEVICE, 0, (char *)&dev->descriptor, sizeof(usb_device_desc_t)) != 0) {
+	if (usb_getDescriptor(dev, USB_DESC_DEVICE, 0, (char *)&dev->desc, sizeof(usb_device_desc_t)) != 0) {
 		fprintf(stderr, "usb: Fail to get device descriptor\n");
 		return -1;
 	}
 
-	usb_dumpDeviceDescriptor(stderr, &dev->descriptor);
+	usb_dumpDeviceDescriptor(stderr, &dev->desc);
 
 	return 0;
 }
 
 
-static int usb_getConfigurationDescriptor(usb_device_t *dev)
+static int usb_getConfiguration(usb_device_t *dev)
 {
-	usb_configuration_desc_t desc;
+	int i, j;
+	usb_configuration_desc_t pre, *conf;
+	usb_interface_desc_t *iface;
+	usb_endpoint_desc_t *ep;
+	char *ptr;
 
-	if (usb_getDescriptor(dev, USB_DESC_CONFIG, 0, (char *)&desc, sizeof(desc)) != 0) {
-		fprintf(stderr, "usb: Fail to get device descriptor\n");
+	/* Get first nine bytes to get to know configuration len */
+	if (usb_getDescriptor(dev, USB_DESC_CONFIG, 0, (char *)&pre, sizeof(pre)) != 0) {
+		fprintf(stderr, "usb: Fail to get configuration descriptor\n");
 		return -1;
 	}
+
+	/* TODO: check descriptor correctness */
+	if ((conf = malloc(pre.wTotalLength)) == NULL)
+		return -ENOMEM;
+
+	/* TODO: Handle multiple configuration devices */
+	if (usb_getDescriptor(dev, USB_DESC_CONFIG, 0, (char *)conf, pre.wTotalLength) != 0) {
+		fprintf(stderr, "usb: Fail to get configuration descriptor\n");
+		return -1;
+	}
+
+	dev->nifs = conf->bNumInterfaces;
+	if ((dev->ifs = calloc(dev->nifs, sizeof(usb_interface_t))) == NULL)
+		return -ENOMEM;
+
+	usb_dumpConfigurationDescriptor(stderr, conf);
+
+	ptr = (char *)conf + sizeof(usb_configuration_desc_t);
+	if (ptr[1] != USB_DESC_ENDPOINT) {
+		/* Class descriptor */
+	}
+	for (i = 0; i < dev->nifs; i++) {
+		iface = (usb_interface_desc_t *)ptr;
+		usb_dumpInferfaceDesc(stderr, iface);
+		dev->ifs[i].neps = iface->bNumEndpoints;
+		if ((dev->ifs[i].eps = calloc(iface->bNumEndpoints, sizeof(usb_interface_t))) == NULL)
+			return -ENOMEM;
+
+		ptr += sizeof(usb_interface_desc_t);
+		for (j = 0; j < iface->bNumEndpoints; j++) {
+			ep = (usb_endpoint_desc_t *)ptr;
+			usb_epConf(dev, &dev->ifs[i].eps[j], ep);
+			ptr += sizeof(usb_endpoint_desc_t);
+			usb_dumpEndpointDesc(stderr, ep);
+		}
+		dev->ifs[i].desc = iface;
+	}
+
+	dev->conf = conf;
+
+	return 0;
+}
+
+
+static int usb_getStringDesc(usb_device_t *dev, char **buf, int index)
+{
+	usb_string_desc_t desc = { 0 };
+	int i;
+	size_t asciisz;
+
+	if (usb_getDescriptor(dev, USB_DESC_STRING, index, (char *)&desc, sizeof(desc)) != 0) {
+		fprintf(stderr, "usb: Fail to get string descriptor\n");
+		return -1;
+	}
+	asciisz = (desc.bLength - 2) / 2;
+
+	/* Convert from unicode to ascii */
+	if ((*buf = calloc(1, asciisz + 1)) == NULL)
+		return -ENOMEM;
+
+	for (i = 0; i < asciisz; i++)
+		(*buf)[i] = desc.wData[i * 2];
+
+	return 0;
+}
+
+
+static int usb_getAllStringDescs(usb_device_t *dev)
+{
+	usb_string_desc_t desc = { 0 };
+	int i;
+
+	if (usb_getDescriptor(dev, USB_DESC_STRING, 0, (char *)&desc, sizeof(desc)) != 0) {
+		fprintf(stderr, "usb: Fail to get configuration descriptor\n");
+		return -1;
+	}
+
+	if (desc.bLength < 4)
+		return -1;
+
+	/* Choose language id */
+	dev->langId = desc.wData[0] | ((uint16_t)desc.wData[1] << 8);
+
+	if (dev->desc.iManufacturer != 0) {
+		if (usb_getStringDesc(dev, &dev->manufacturer, dev->desc.iManufacturer) != 0)
+			return -ENOMEM;
+		printf("Manufacturer: %s\n", dev->manufacturer);
+	}
+
+	if (dev->desc.iProduct != 0) {
+		if (usb_getStringDesc(dev, &dev->product, dev->desc.iProduct) != 0)
+			return -ENOMEM;
+		printf("Product: %s\n", dev->product);
+	}
+
+	if (dev->desc.iSerialNumber != 0) {
+		if (usb_getStringDesc(dev, &dev->serialNumber, dev->desc.iSerialNumber) != 0)
+			return -ENOMEM;
+		printf("Serial Number: %s\n", dev->serialNumber);
+	}
+
+	for (i = 0; i < dev->nifs; i++) {
+		if (dev->ifs[i].desc->iInterface == 0)
+			continue;
+
+		if (usb_getStringDesc(dev, &dev->ifs[i].str, dev->ifs[i].desc->iInterface) != 0)
+			return -ENOMEM;
+		printf("Interface string: %s\n", dev->ifs[i].str);
+	}
+
+	/* TODO: Configuration string descriptors */
 
 	return 0;
 }
@@ -223,7 +398,7 @@ static void usb_deviceConnected(usb_device_t *hub, int port)
 		hcd_deviceFree(dev);
 		return;
 	}
-	dev->ep0->max_packet_len = dev->descriptor.bMaxPacketSize0;
+	dev->ep0->max_packet_len = dev->desc.bMaxPacketSize0;
 
 	if ((addr = hcd_deviceAdd(hub->hcd, hub, dev, port)) < 0) {
 		fprintf(stderr, "usb: Fail to add device to hcd\n");
@@ -245,6 +420,17 @@ static void usb_deviceConnected(usb_device_t *hub, int port)
 		hcd_deviceFree(dev);
 		return;
 	}
+
+	if (usb_getConfiguration(dev) != 0) {
+		fprintf(stderr, "usb: Fail to get configuration descriptor\n");
+		hcd_deviceRemove(hub->hcd, hub, port);
+		hcd_deviceFree(dev);
+		return;
+	}
+
+	usb_getAllStringDescs(dev);
+
+	/* Now bind device to drivers */
 }
 
 

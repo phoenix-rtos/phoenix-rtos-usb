@@ -28,10 +28,8 @@ usb_device_t *hcd_deviceCreate(hcd_t *hcd)
 {
 	usb_device_t *dev;
 
-	if ((dev = malloc(sizeof(usb_device_t))) == NULL)
+	if ((dev = calloc(1, sizeof(usb_device_t))) == NULL)
 		return NULL;
-
-	dev->address = 0;
 
 	/* Create control endpoint */
 	if ((dev->ep0 = malloc(sizeof(usb_endpoint_t))) == NULL) {
@@ -53,9 +51,31 @@ usb_device_t *hcd_deviceCreate(hcd_t *hcd)
 
 void hcd_deviceFree(usb_device_t *dev)
 {
+	int i;
+
 	if (dev->hcd)
 		dev->hcd->ops->devDestroy(dev->hcd, dev);
 	free(dev->ep0);
+	if (dev->manufacturer != NULL)
+		free(dev->manufacturer);
+	if (dev->product != NULL)
+		free(dev->product);
+	if (dev->product != NULL)
+		free(dev->serialNumber);
+	if (dev->conf != NULL)
+		free(dev->conf);
+
+	for (i = 0; i < dev->nifs; i++) {
+		if (dev->ifs[i].eps != NULL)
+			free(dev->ifs[i].eps);
+
+		if (dev->ifs[i].str != NULL)
+			free(dev->ifs[i].str);
+	}
+
+	if (dev->ifs != NULL)
+		free(dev->ifs);
+
 	free(dev);
 }
 
