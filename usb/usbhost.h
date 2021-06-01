@@ -106,25 +106,42 @@ typedef struct {
 
 typedef struct usb_endpoint {
 	struct usb_device *device;
-	enum { usb_ep_control, usb_ep_interrupt, usb_ep_bulk, usb_ep_isochronous } type;
-	enum { usb_ep_in, usb_ep_out, usb_ep_bi } direction;
+	enum { usb_ep_control = 0, usb_ep_isochronous, usb_ep_bulk, usb_ep_interrupt } type;
+	enum { usb_ep_out = 0, usb_ep_in, usb_ep_bi } direction;
 
 	int max_packet_len;
 	int number;
+	int interval;
 
 	void *hcdpriv;
 } usb_endpoint_t;
 
 
+typedef struct usb_interface {
+	usb_interface_desc_t *desc;
+	void *classDesc;
+	char *str;
+
+	usb_driver_t *driver;
+	usb_endpoint_t *eps;
+	int neps;
+} usb_interface_t;
+
+
 typedef struct usb_device {
 	enum { usb_full_speed = 0, usb_low_speed, usb_high_speed } speed;
-	usb_device_desc_t descriptor;
+	usb_device_desc_t desc;
+	usb_configuration_desc_t *conf;
+	char *manufacturer, *product, *serialNumber;
+	uint16_t langId;
 
-	char name[32];
 	usb_driver_t *driver;
+
 	usb_endpoint_t *ep0;
 	struct hcd *hcd;
 
+	struct usb_interface *ifs;
+	int nifs;
 	struct usb_device **devices;
 	struct usb_device *hub;
 	int ndevices;
@@ -132,6 +149,7 @@ typedef struct usb_device {
 
 	int address;
 } usb_device_t;
+
 
 typedef struct usb_transfer {
 	struct usb_transfer *next, *prev;
