@@ -144,7 +144,7 @@ static const hcd_ops_t *hcd_lookup(const char *type)
 }
 
 
-static hcd_t *hcd_create(const hcd_ops_t *ops, const hcd_info_t *info)
+static hcd_t *hcd_create(const hcd_ops_t *ops, const hcd_info_t *info, int num)
 {
 	hcd_t *hcd;
 
@@ -155,6 +155,7 @@ static hcd_t *hcd_create(const hcd_ops_t *ops, const hcd_info_t *info)
 	hcd->priv = NULL;
 	hcd->transfers = NULL;
 	hcd->ops = ops;
+	hcd->num = num;
 	mutexCreate(&hcd->transLock);
 	/*
 	 * 0 is reserved for the enumerating device,
@@ -196,6 +197,7 @@ hcd_t *hcd_init(void)
 	usb_device_t *hub;
 	hcd_t *hcd, *res = NULL;
 	int nhcd, i;
+	int num = 1;
 
 	if ((nhcd = hcd_getInfo(&info)) <= 0)
 		return NULL;
@@ -206,7 +208,7 @@ hcd_t *hcd_init(void)
 			return NULL;
 		}
 
-		if ((hcd = hcd_create(ops, &info[i])) == NULL) {
+		if ((hcd = hcd_create(ops, &info[i], num++)) == NULL) {
 			hcd_free(res);
 			return NULL;
 		}

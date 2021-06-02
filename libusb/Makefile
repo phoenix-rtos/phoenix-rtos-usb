@@ -7,5 +7,5 @@
 NAME := libusb
 LOCAL_PATH := $(call my-dir)
 HEADERS := $(wildcard $(LOCAL_PATH)/*.h)
-LOCAL_SRCS := cdc_client.c hid_client.c
+LOCAL_SRCS := cdc_client.c hid_client.c driver.c
 include $(static-lib.mk)

@@ -57,6 +57,9 @@
 #define CLASS_REQ_GET_LINE_CODING 0x21
 #define CLASS_REQ_SET_CONTROL_LINE_STATE 0x22
 
+/* class codes */
+#define USB_CLASS_MASS_STORAGE	0x8
+
 
 /* descriptor types */
 #define USB_DESC_DEVICE 1
