@@ -13,9 +13,6 @@
 
 #include <stdint.h>
 
-#include <hcd.h>
-#include <hub.h>
-
 #include <errno.h>
 #include <sys/list.h>
 #include <sys/msg.h>
@@ -29,10 +26,16 @@
 #include <stdlib.h>
 #include <unistd.h>
 
+#include <hcd.h>
+#include <hub.h>
+#include <usbdriver.h>
+
+
 static struct {
 	handle_t common_lock, enumeratorLock;
 	handle_t enumeratorCond;
 	hcd_t *hcds;
+	usb_driver_t *drvs;
 	int nhcd;
 	uint32_t port;
 } usb_common;
@@ -325,6 +328,47 @@ static int usb_getAllStringDescs(usb_device_t *dev)
 }
 
 
+static int usb_devBind(usb_device_t *dev, int iface, usb_driver_t *drv)
+{
+	msg_t msg;
+	usb_msg_t *umsg = (usb_msg_t *)msg.i.raw;
+
+	msg.type = mtDevCtl;
+	dev->ifs[iface].driver = drv;
+	umsg->type = usb_msg_insertion;
+	umsg->insertion.bus = dev->hcd->num;
+	umsg->insertion.dev = dev->address;
+	umsg->insertion.interface = iface;
+	/* TODO: get rid of it, get descriptors from seperate msgs */
+	umsg->insertion.descriptor = dev->desc;
+
+	return msgSend(drv->port, &msg);
+}
+
+
+static int usb_devMatchDrivers(usb_device_t *dev)
+{
+	usb_driver_t *drv = usb_common.drvs;
+	int i;
+
+	if (drv == NULL) {
+		/* TODO: make device orphaned */
+		return -1;
+	}
+
+	for (i = 0; i < dev->nifs; i++) {
+		do {
+			/* TODO: better matching */
+			if (dev->ifs[i].desc->bInterfaceClass == drv->filter.dclass) {
+				usb_devBind(dev, i, drv);
+			}
+		} while (drv != usb_common.drvs);
+	}
+
+	return 0;
+}
+
+
 static int usb_devsList(char *buffer, size_t size)
 {
 	return 0;
@@ -428,9 +472,19 @@ static void usb_deviceConnected(usb_device_t *hub, int port)
 		return;
 	}
 
-	usb_getAllStringDescs(dev);
+	if (usb_getAllStringDescs(dev) != 0) {
+		fprintf(stderr, "usb: Fail to get string descriptors\n");
+		hcd_deviceRemove(hub->hcd, hub, port);
+		hcd_deviceFree(dev);
+		return;
+	}
 
-	/* Now bind device to drivers */
+	if (usb_devMatchDrivers(dev) != 0) {
+		fprintf(stderr, "usb: Fail to match drivers for device\n");
+		/* TODO: make device orphaned */
+		return;
+	}
+
 }
 
 
@@ -497,6 +551,26 @@ static void usb_enumerator(void *arg)
 }
 
 
+static int usb_handleConnect(usb_connect_t *c, unsigned pid)
+{
+	usb_driver_t *drv;
+
+	if ((drv = malloc(sizeof(usb_driver_t))) == NULL)
+		return -ENOMEM;
+
+	drv->devices = NULL;
+	drv->pid = pid;
+	drv->filter = c->filter;
+	drv->port = c->port;
+
+	LIST_ADD(&usb_common.drvs, drv);
+
+	/* TODO: handle orphaned devices */
+
+	return 0;
+}
+
+
 static void usb_msgthr(void *arg)
 {
 	unsigned port = (int)arg;
@@ -514,7 +588,16 @@ static void usb_msgthr(void *arg)
 				msg.o.io.err = usb_devsList(msg.o.data, msg.o.size);
 				break;
 			case mtDevCtl:
-				umsg = (void *)msg.i.raw;
+				umsg = (usb_msg_t *)msg.i.raw;
+				switch (umsg->type) {
+					case usb_msg_connect:
+						printf("usb: msg connect\n");
+						msg.o.io.err = usb_handleConnect(&umsg->connect, msg.pid);
+						break;
+					default:
+						fprintf(stderr, "unsupported usb_msg type\n");
+						break;
+				}
 				break;
 			default:
 				fprintf(stderr, "usb: unsupported msg type\n");
