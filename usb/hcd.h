@@ -67,6 +67,8 @@ void hcd_deviceFree(usb_device_t *dev);
 
 usb_device_t *hcd_deviceCreate(hcd_t *hcd);
 
+usb_device_t *hcd_deviceFind(hcd_t *hcd, int addr);
+
 hcd_t *hcd_init(void);
 
 

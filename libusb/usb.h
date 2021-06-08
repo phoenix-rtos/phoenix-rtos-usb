@@ -199,4 +199,18 @@ typedef struct usb_functional_desc {
 } __attribute__((packed)) usb_functional_desc_t;
 
 
+typedef enum {
+	usb_transfer_control = 0,
+	usb_transfer_isochronous,
+	usb_transfer_bulk,
+	usb_transfer_interrupt,
+} usb_transfer_type_t;
+
+
+typedef enum {
+	usb_dir_out = 0,
+	usb_dir_in,
+	usb_dir_bi /* TODO: get rid of it */
+} usb_dir_t;
+
 #endif
