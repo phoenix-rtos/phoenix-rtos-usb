@@ -15,6 +15,7 @@
 #define _USB_HOST_H_
 
 #include <sys/types.h>
+#include <sys/msg.h>
 #include <usbdriver.h>
 #include <usb.h>
 
@@ -24,21 +25,31 @@ typedef struct usb_driver {
 	unsigned pid;
 	unsigned port;
 	usb_device_id_t filter;
-	struct usb_device *devices;
 } usb_driver_t;
 
 
 typedef struct usb_endpoint {
-	struct usb_device *device;
-	enum { usb_ep_control = 0, usb_ep_isochronous, usb_ep_bulk, usb_ep_interrupt } type;
-	enum { usb_ep_out = 0, usb_ep_in, usb_ep_bi } direction;
+	struct usb_endpoint *prev, *next;
+
+	usb_transfer_type_t type;
+	usb_dir_t direction;
 
 	int max_packet_len;
 	int number;
 	int interval;
+	int connected;
+	int interface;
 
+	struct usb_device *device;
 	void *hcdpriv;
 } usb_endpoint_t;
+
+
+typedef struct usb_pipe {
+	idnode_t linkage;
+	struct usb_driver *drv;
+	struct usb_endpoint *ep;
+} usb_pipe_t;
 
 
 typedef struct usb_interface {
@@ -47,8 +58,6 @@ typedef struct usb_interface {
 	char *str;
 
 	usb_driver_t *driver;
-	usb_endpoint_t *eps;
-	int neps;
 } usb_interface_t;
 
 
@@ -56,12 +65,12 @@ typedef struct usb_device {
 	enum { usb_full_speed = 0, usb_low_speed, usb_high_speed } speed;
 	usb_device_desc_t desc;
 	usb_configuration_desc_t *conf;
-	char *manufacturer, *product, *serialNumber;
+	char *manufacturer;
+	char *product;
+	char *serialNumber;
 	uint16_t langId;
 
-	usb_driver_t *driver;
-
-	usb_endpoint_t *ep0;
+	usb_endpoint_t *eps;
 	struct hcd *hcd;
 
 	struct usb_interface *ifs;
@@ -73,6 +82,15 @@ typedef struct usb_device {
 
 	int address;
 } usb_device_t;
+
+
+typedef struct usb_urb_handler {
+	struct usb_urb_handler *prev, *next;
+	struct usb_transfer *transfer;
+	unsigned long rid;
+	msg_t msg;
+	unsigned int port;
+} usb_urb_handler_t;
 
 
 typedef struct usb_transfer {
@@ -90,6 +108,9 @@ typedef struct usb_transfer {
 	size_t size;
 	int type;
 	int direction;
+
+	handle_t *cond;
+	usb_urb_handler_t *handler;
 
 	void *hcdpriv;
 } usb_transfer_t;

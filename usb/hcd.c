@@ -27,23 +27,28 @@ static struct {
 usb_device_t *hcd_deviceCreate(hcd_t *hcd)
 {
 	usb_device_t *dev;
+	usb_endpoint_t *ep0;
 
 	if ((dev = calloc(1, sizeof(usb_device_t))) == NULL)
 		return NULL;
 
 	/* Create control endpoint */
-	if ((dev->ep0 = malloc(sizeof(usb_endpoint_t))) == NULL) {
+	if ((ep0 = malloc(sizeof(usb_endpoint_t))) == NULL) {
 		free(dev);
 		return NULL;
 	}
 
 	dev->hcd = hcd;
-	dev->ep0->max_packet_len = 64; /* Default value */
-	dev->ep0->number = 0;
-	dev->ep0->device = dev;
-	dev->ep0->type = usb_ep_control;
-	dev->ep0->direction = usb_ep_bi;
-	dev->ep0->hcdpriv = NULL;
+	ep0->max_packet_len = 64; /* Default value */
+	ep0->number = 0;
+	ep0->device = dev;
+	ep0->type = usb_transfer_control;
+	ep0->direction = usb_dir_bi;
+	ep0->connected = 0;
+	ep0->interval = 0;
+	ep0->interface = 0;
+	ep0->hcdpriv = NULL;
+	LIST_ADD(&dev->eps, ep0);
 
 	return dev;
 }
@@ -55,7 +60,7 @@ void hcd_deviceFree(usb_device_t *dev)
 
 	if (dev->hcd)
 		dev->hcd->ops->devDestroy(dev->hcd, dev);
-	free(dev->ep0);
+
 	if (dev->manufacturer != NULL)
 		free(dev->manufacturer);
 	if (dev->product != NULL)
@@ -66,15 +71,14 @@ void hcd_deviceFree(usb_device_t *dev)
 		free(dev->conf);
 
 	for (i = 0; i < dev->nifs; i++) {
-		if (dev->ifs[i].eps != NULL)
-			free(dev->ifs[i].eps);
-
 		if (dev->ifs[i].str != NULL)
 			free(dev->ifs[i].str);
 	}
 
 	if (dev->ifs != NULL)
 		free(dev->ifs);
+
+	/* TODO: free endpoints */
 
 	free(dev);
 }
@@ -169,6 +173,7 @@ static hcd_t *hcd_create(const hcd_ops_t *ops, const hcd_info_t *info, int num)
 	return hcd;
 }
 
+
 static void hcd_free(hcd_t *hcds)
 {
 	hcd_ops_t *nops, *tops = hcd_common.hcdops;
@@ -189,6 +194,25 @@ static void hcd_free(hcd_t *hcds)
     	} while ((tops = nops) != hcd_common.hcdops);
 	}
 }
+
+
+usb_device_t *hcd_deviceFind(hcd_t *hcd, int addr)
+{
+	usb_device_t *d = hcd->roothub;
+	int i;
+
+	if (addr == d->address)
+		return d;
+
+	/* TODO: search subdevices using locationId */
+	for (i = 0; i < d->ndevices; i++) {
+		if (addr == d->devices[i]->address)
+			return d->devices[i];
+	}
+
+	return NULL;
+}
+
 
 hcd_t *hcd_init(void)
 {
