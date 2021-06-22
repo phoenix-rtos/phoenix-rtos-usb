@@ -245,16 +245,18 @@ static int usb_getConfiguration(usb_device_t *dev)
 	usb_dumpConfigurationDescriptor(stderr, conf);
 
 	ptr = (char *)conf + sizeof(usb_configuration_desc_t);
-	if (ptr[1] != USB_DESC_ENDPOINT) {
-		/* Class descriptor */
-	}
 	for (i = 0; i < dev->nifs; i++) {
 		iface = (usb_interface_desc_t *)ptr;
 		usb_dumpInferfaceDesc(stderr, iface);
 
 		ptr += sizeof(usb_interface_desc_t);
+		/* Class and Vendor specific descriptors */
+		/* TODO: handle them properly */
+		while (ptr[1] != USB_DESC_ENDPOINT) {
+			ptr += ptr[0];
+		}
 		for (j = 0; j < iface->bNumEndpoints; j++) {
-			ep = (usb_endpoint_t *)malloc(sizeof(usb_endpoint_t));
+			ep = malloc(sizeof(usb_endpoint_t));
 			epDesc = (usb_endpoint_desc_t *)ptr;
 			usb_epConf(dev, ep, epDesc, i);
 			LIST_ADD(&dev->eps, ep);
@@ -347,16 +349,48 @@ static int usb_devBind(usb_device_t *dev, int iface, usb_driver_t *drv)
 	msg_t msg;
 	usb_msg_t *umsg = (usb_msg_t *)msg.i.raw;
 
+	fprintf(stderr, "usb: Binding iface: %d to drv: %d\n", iface, drv->pid);
+
 	msg.type = mtDevCtl;
 	dev->ifs[iface].driver = drv;
 	umsg->type = usb_msg_insertion;
 	umsg->insertion.bus = dev->hcd->num;
 	umsg->insertion.dev = dev->address;
 	umsg->insertion.interface = iface;
-	/* TODO: get rid of it, get descriptors from seperate msgs */
 	umsg->insertion.descriptor = dev->desc;
 
 	return msgSend(drv->port, &msg);
+}
+
+
+/* TODO: Handle multiple VID:PID pairs per one driver*/
+static int usb_drvcmp(usb_device_desc_t *dev, usb_interface_desc_t *iface, usb_device_id_t *filter)
+{
+	if (filter->vid != USB_CONNECT_WILDCARD && dev->idVendor != filter->vid)
+		return 0;
+
+	if (filter->pid != USB_CONNECT_WILDCARD && dev->idProduct != filter->pid)
+		return 0;
+
+	if (filter->dclass != USB_CONNECT_WILDCARD) {
+		if ((dev->bDeviceClass != 0 && dev->bDeviceClass != filter->dclass) ||
+		    (dev->bDeviceClass == 0 && iface->bInterfaceClass != filter->dclass))
+			return 0;
+	}
+
+	if (filter->subclass != USB_CONNECT_WILDCARD) {
+		if ((dev->bDeviceSubClass != 0 && dev->bDeviceSubClass != filter->subclass) ||
+		    (dev->bDeviceSubClass == 0 && iface->bInterfaceSubClass != filter->subclass))
+			return 0;
+	}
+
+	if (filter->protocol != USB_CONNECT_WILDCARD) {
+		if ((dev->bDeviceProtocol != 0 && dev->bDeviceProtocol != filter->protocol) ||
+		    (dev->bDeviceProtocol == 0 && iface->bInterfaceProtocol!= filter->protocol))
+			return 0;
+	}
+
+	return 1;
 }
 
 
@@ -373,9 +407,12 @@ static int usb_devMatchDrivers(usb_device_t *dev)
 	for (i = 0; i < dev->nifs; i++) {
 		do {
 			/* TODO: better matching */
-			if (dev->ifs[i].desc->bInterfaceClass == drv->filter.dclass) {
-				usb_devBind(dev, i, drv);
+			if (usb_drvcmp(&dev->desc, dev->ifs[i].desc, &drv->filter)) {
+				if (usb_devBind(dev, i, drv) != 0)
+					return -1;
+				break;
 			}
+			drv = drv->next;
 		} while (drv != usb_common.drvs);
 	}
 
@@ -517,6 +554,7 @@ static void usb_portStatusChanged(usb_device_t *hub, int port)
 {
 	usb_port_status_t status;
 
+	fprintf(stderr, "USB: PORT STATUS CHANGED\n");
 	if (hub->hubOps->getPortStatus(hub, port, &status) != 0) {
 		fprintf(stderr, "usb: getPortStatus port %d failed!\n", port);
 		return;
@@ -529,9 +567,13 @@ static void usb_portStatusChanged(usb_device_t *hub, int port)
 
 	if (status.wPortChange & USB_PORT_STAT_C_CONNECTION) {
 		if (status.wPortStatus & USB_PORT_STAT_CONNECTION) {
-			usb_deviceConnected(hub, port);
+			if (hub->devices[port - 1] == NULL)
+				usb_deviceConnected(hub, port);
+			else
+				usb_portReset(hub, port, &status);
 		} else {
-			usb_deviceDisconnected(hub, port);
+			if (hub->devices[port - 1] != NULL)
+				usb_deviceDisconnected(hub, port);
 		}
 	}
 }
@@ -622,6 +664,7 @@ static int usb_handleUrb(msg_t *msg, unsigned int port, unsigned long rid)
 	t->size = umsg->urb.size;
 	t->buffer = msg->i.data;
 	t->cond = &usb_common.finishedCond;
+	t->transfered = 0;
 
 	h->msg = *msg;
 	h->port = port;
@@ -697,8 +740,8 @@ static int usb_handleOpen(usb_open_t *o, msg_t *msg)
 		if (ep->direction == o->dir && ep->type == o->type && !ep->connected) {
 			if ((pipe = malloc(sizeof(usb_pipe_t))) == NULL)
 				return -ENOMEM;
-
 			idtree_alloc(&usb_common.pipes, &pipe->linkage);
+			fprintf(stderr, "usb: Opening pipe id %d ep_num: %d ep_dir: %d ep_type: %d\n", pipe->linkage.id, ep->number, ep->direction, ep->type);
 			break;
 		}
 		ep = ep->next;
@@ -764,7 +807,7 @@ static void usb_statusthr(void *arg)
 		mutexUnlock(usb_common.finishedLock);
 
 		if (h->transfer->type == usb_transfer_bulk || h->transfer->type == usb_transfer_control) {
-			h->msg.o.io.err = h->transfer->error;
+			h->msg.o.io.err = (h->transfer->error != 0) ? -h->transfer->error : h->transfer->transfered;
 			if (msgRespond(h->port, &h->msg, h->rid) != 0) {
 				/* Driver is dead? TODO: remove driver */
 			}

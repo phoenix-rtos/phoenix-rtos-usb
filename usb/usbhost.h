@@ -106,6 +106,7 @@ typedef struct usb_transfer {
 
 	char *buffer;
 	size_t size;
+	size_t transfered;
 	int type;
 	int direction;
 
