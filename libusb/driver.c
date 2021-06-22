@@ -128,3 +128,16 @@ int usb_setConfiguration(unsigned pipe, int conf)
 
 	return usb_transferControl(pipe, &setup, NULL, 0, usb_dir_out);
 }
+
+int usb_clearFeatureHalt(unsigned pipe, int ep)
+{
+	usb_setup_packet_t setup = (usb_setup_packet_t) {
+		.bmRequestType = REQUEST_DIR_HOST2DEV | REQUEST_TYPE_STANDARD | REQUEST_RECIPIENT_DEVICE,
+		.bRequest = REQ_CLEAR_FEATURE,
+		.wValue = USB_ENDPOINT_HALT,
+		.wIndex = ep,
+		.wLength = 0,
+	};
+
+	return usb_transferControl(pipe, &setup, NULL, 0, usb_dir_out);
+}

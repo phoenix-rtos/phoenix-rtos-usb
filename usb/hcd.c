@@ -56,6 +56,7 @@ usb_device_t *hcd_deviceCreate(hcd_t *hcd)
 
 void hcd_deviceFree(usb_device_t *dev)
 {
+	usb_endpoint_t *ep;
 	int i;
 
 	if (dev->hcd)
@@ -79,6 +80,10 @@ void hcd_deviceFree(usb_device_t *dev)
 		free(dev->ifs);
 
 	/* TODO: free endpoints */
+	while ((ep = dev->eps) != NULL) {
+		LIST_REMOVE(&dev->eps, ep);
+		free(ep);
+	}
 
 	free(dev);
 }

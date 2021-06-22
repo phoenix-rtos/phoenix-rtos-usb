@@ -80,5 +80,6 @@ int usb_open(usb_insertion_t *dev, usb_transfer_type_t type, usb_dir_t dir);
 int usb_transferControl(unsigned pipe, usb_setup_packet_t *setup, void *data, size_t size, usb_dir_t dir);
 int usb_transferBulk(unsigned pipe, void *data, size_t size, usb_dir_t dir);
 int usb_setConfiguration(unsigned pipe, int conf);
+int usb_clearFeatureHalt(unsigned pipe, int ep);
 
 #endif /* _USBDRIVER_H_ */
