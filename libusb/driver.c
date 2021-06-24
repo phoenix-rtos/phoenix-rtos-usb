@@ -41,9 +41,6 @@ int usb_eventsWait(int port, msg_t *msg)
 	if (msgRecv(port, msg, &rid) < 0)
 		return -1;
 
-	if (msg->type != mtDevCtl)
-		return -1;
-
 	if (msgRespond(port, msg, rid) < 0)
 		return -1;
 
@@ -161,6 +158,75 @@ usb_modeswitch_t *usb_modeswitchFind(uint16_t vid, uint16_t pid, const usb_modes
 }
 
 
+void usb_dumpDeviceDescriptor(FILE *stream, usb_device_desc_t *descr)
+{
+	fprintf(stream, "DEVICE DESCRIPTOR:\n");
+	fprintf(stream, "\tbLength: %d\n", descr->bLength);
+	fprintf(stream, "\tbDescriptorType: 0x%x\n", descr->bDescriptorType);
+	fprintf(stream, "\tbcdUSB: %d\n", descr->bcdUSB);
+	fprintf(stream, "\tbDeviceClass: %d\n", descr->bDeviceClass);
+	fprintf(stream, "\tbDeviceSubClass: %d\n", descr->bDeviceSubClass);
+	fprintf(stream, "\tbDeviceProtocol: %d\n", descr->bDeviceProtocol);
+	fprintf(stream, "\tbMaxPacketSize0: %d\n", descr->bMaxPacketSize0);
+	fprintf(stream, "\tidVendor: 0x%x\n", descr->idVendor);
+	fprintf(stream, "\tidProduct: 0x%x\n", descr->idProduct);
+	fprintf(stream, "\tbcdDevice: %d\n", descr->bcdDevice);
+	fprintf(stream, "\tiManufacturer: %d\n", descr->iManufacturer);
+	fprintf(stream, "\tiProduct: %d\n", descr->iProduct);
+	fprintf(stream, "\tiSerialNumber: %d\n", descr->iSerialNumber);
+	fprintf(stream, "\tbNumConfigurations: %d\n", descr->bNumConfigurations);
+}
+
+
+void usb_dumpConfigurationDescriptor(FILE *stream, usb_configuration_desc_t *descr)
+{
+	fprintf(stream, "CONFIGURATION DESCRIPTOR:\n");
+	fprintf(stream, "\tbLength: %d\n", descr->bLength);
+	fprintf(stream, "\tbDescriptorType: 0x%x\n", descr->bDescriptorType);
+	fprintf(stream, "\twTotalLength: %d\n", descr->wTotalLength);
+	fprintf(stream, "\tbNumInterfaces: %d\n", descr->bNumInterfaces);
+	fprintf(stream, "\tbConfigurationValue: %d\n", descr->bConfigurationValue);
+	fprintf(stream, "\tiConfiguration %d\n", descr->iConfiguration);
+	fprintf(stream, "\tbmAttributes: 0x%x\n", descr->bmAttributes);
+	fprintf(stream, "\tbMaxPower: %d\n", descr->bMaxPower);
+}
+
+
+void usb_dumpInferfaceDesc(FILE *stream, usb_interface_desc_t *descr)
+{
+	fprintf(stream, "INTERFACE DESCRIPTOR:\n");
+	fprintf(stream, "\tbLength: %d\n", descr->bLength);
+	fprintf(stream, "\tbDescriptorType: 0x%x\n", descr->bDescriptorType);
+	fprintf(stream, "\tbInterfaceNumber: %d\n", descr->bInterfaceNumber);
+	fprintf(stream, "\tbNumEndpoints: %d\n", descr->bNumEndpoints);
+	fprintf(stream, "\tbInterfaceClass: %x\n", descr->bInterfaceClass);
+	fprintf(stream, "\tbInterfaceSubClass: 0x%x\n", descr->bInterfaceSubClass);
+	fprintf(stream, "\tbInterfaceProtocol: 0x%x\n", descr->bInterfaceProtocol);
+	fprintf(stream, "\tiInterface: %d\n", descr->iInterface);
+}
+
+
+void usb_dumpEndpointDesc(FILE *stream, usb_endpoint_desc_t *descr)
+{
+	fprintf(stream, "ENDPOINT DESCRIPTOR:\n");
+	fprintf(stream, "\tbLength: %d\n", descr->bLength);
+	fprintf(stream, "\tbDescriptorType: 0x%x\n", descr->bDescriptorType);
+	fprintf(stream, "\tbEndpointAddress: %d\n", descr->bEndpointAddress);
+	fprintf(stream, "\tbmAttributes: 0x%x\n", descr->bmAttributes);
+	fprintf(stream, "\twMaxPacketSize: %d\n", descr->wMaxPacketSize);
+	fprintf(stream, "\tbInterval: %d\n", descr->bInterval);
+}
+
+
+void usb_dumpStringDesc(FILE *stream, usb_string_desc_t *descr)
+{
+	fprintf(stream, "STRING DESCRIPTOR:\n");
+	fprintf(stream, "\tbLength: %d\n", descr->bLength);
+	fprintf(stream, "\tbDescriptorType: 0x%x\n", descr->bDescriptorType);
+	fprintf(stream, "\twData: %.*s\n", descr->bLength - 2,  descr->wData);
+}
+
+
 int usb_modeswitchHandle(usb_insertion_t *insertion, usb_modeswitch_t *mode)
 {
 	int pipeCtrl, pipeIn, pipeOut;
@@ -177,10 +243,8 @@ int usb_modeswitchHandle(usb_insertion_t *insertion, usb_modeswitch_t *mode)
 	if ((pipeOut = usb_open(insertion, usb_transfer_bulk, usb_dir_out)) < 0)
 		return -EINVAL;
 
-	fprintf(stderr, "usb: Performing modeswitch\n");
 	if (usb_transferBulk(pipeOut, mode->msg, sizeof(mode->msg), usb_dir_out) < 0)
 		return -1;
-	fprintf(stderr, "usb: modeswitch msg write success\n");
 
 #if 0
 	/* TODO: optimize switch time by using Halt Feature */

@@ -66,75 +66,7 @@ static void usb_epConf(usb_device_t *dev, usb_endpoint_t *ep, usb_endpoint_desc_
 	ep->interval = desc->bInterval;
 	ep->hcdpriv = NULL;
 	ep->interface = interface;
-	ep->connected = 0;
-}
-
-static void usb_dumpDeviceDescriptor(FILE *stream, usb_device_desc_t *descr)
-{
-	fprintf(stream, "DEVICE DESCRIPTOR:\n");
-	fprintf(stream, "\tbLength: %d\n", descr->bLength);
-	fprintf(stream, "\tbDescriptorType: 0x%x\n", descr->bDescriptorType);
-	fprintf(stream, "\tbcdUSB: %d\n", descr->bcdUSB);
-	fprintf(stream, "\tbDeviceClass: %d\n", descr->bDeviceClass);
-	fprintf(stream, "\tbDeviceSubClass: %d\n", descr->bDeviceSubClass);
-	fprintf(stream, "\tbDeviceProtocol: %d\n", descr->bDeviceProtocol);
-	fprintf(stream, "\tbMaxPacketSize0: %d\n", descr->bMaxPacketSize0);
-	fprintf(stream, "\tidVendor: 0x%x\n", descr->idVendor);
-	fprintf(stream, "\tidProduct: 0x%x\n", descr->idProduct);
-	fprintf(stream, "\tbcdDevice: %d\n", descr->bcdDevice);
-	fprintf(stream, "\tiManufacturer: %d\n", descr->iManufacturer);
-	fprintf(stream, "\tiProduct: %d\n", descr->iProduct);
-	fprintf(stream, "\tiSerialNumber: %d\n", descr->iSerialNumber);
-	fprintf(stream, "\tbNumConfigurations: %d\n", descr->bNumConfigurations);
-}
-
-
-static void usb_dumpConfigurationDescriptor(FILE *stream, usb_configuration_desc_t *descr)
-{
-	fprintf(stream, "CONFIGURATION DESCRIPTOR:\n");
-	fprintf(stream, "\tbLength: %d\n", descr->bLength);
-	fprintf(stream, "\tbDescriptorType: 0x%x\n", descr->bDescriptorType);
-	fprintf(stream, "\twTotalLength: %d\n", descr->wTotalLength);
-	fprintf(stream, "\tbNumInterfaces: %d\n", descr->bNumInterfaces);
-	fprintf(stream, "\tbConfigurationValue: %d\n", descr->bConfigurationValue);
-	fprintf(stream, "\tiConfiguration %d\n", descr->iConfiguration);
-	fprintf(stream, "\tbmAttributes: 0x%x\n", descr->bmAttributes);
-	fprintf(stream, "\tbMaxPower: %d\n", descr->bMaxPower);
-}
-
-
-static void usb_dumpInferfaceDesc(FILE *stream, usb_interface_desc_t *descr)
-{
-	fprintf(stream, "INTERFACE DESCRIPTOR:\n");
-	fprintf(stream, "\tbLength: %d\n", descr->bLength);
-	fprintf(stream, "\tbDescriptorType: 0x%x\n", descr->bDescriptorType);
-	fprintf(stream, "\tbInterfaceNumber: %d\n", descr->bInterfaceNumber);
-	fprintf(stream, "\tbNumEndpoints: %d\n", descr->bNumEndpoints);
-	fprintf(stream, "\tbInterfaceClass: %x\n", descr->bInterfaceClass);
-	fprintf(stream, "\tbInterfaceSubClass: 0x%x\n", descr->bInterfaceSubClass);
-	fprintf(stream, "\tbInterfaceProtocol: 0x%x\n", descr->bInterfaceProtocol);
-	fprintf(stream, "\tiInterface: %d\n", descr->iInterface);
-}
-
-
-static void usb_dumpEndpointDesc(FILE *stream, usb_endpoint_desc_t *descr)
-{
-	fprintf(stream, "ENDPOINT DESCRIPTOR:\n");
-	fprintf(stream, "\tbLength: %d\n", descr->bLength);
-	fprintf(stream, "\tbDescriptorType: 0x%x\n", descr->bDescriptorType);
-	fprintf(stream, "\tbEndpointAddress: %d\n", descr->bEndpointAddress);
-	fprintf(stream, "\tbmAttributes: 0x%x\n", descr->bmAttributes);
-	fprintf(stream, "\twMaxPacketSize: %d\n", descr->wMaxPacketSize);
-	fprintf(stream, "\tbInterval: %d\n", descr->bInterval);
-}
-
-
-static void usb_dumpStringDesc(FILE *stream, usb_string_desc_t *descr)
-{
-	fprintf(stream, "STRING DESCRIPTOR:\n");
-	fprintf(stream, "\tbLength: %d\n", descr->bLength);
-	fprintf(stream, "\tbDescriptorType: 0x%x\n", descr->bDescriptorType);
-	fprintf(stream, "\twData: %.*s\n", descr->bLength - 2,  descr->wData);
+	ep->pipe = NULL;
 }
 
 
@@ -207,8 +139,6 @@ static int usb_getDeviceDescriptor(usb_device_t *dev)
 		return -1;
 	}
 
-	usb_dumpDeviceDescriptor(stderr, &dev->desc);
-
 	return 0;
 }
 
@@ -222,6 +152,7 @@ static int usb_getConfiguration(usb_device_t *dev)
 	usb_endpoint_t *ep;
 	char *ptr;
 
+	fprintf(stderr, "usb: Device connected\n");
 	/* Get first nine bytes to get to know configuration len */
 	if (usb_getDescriptor(dev, USB_DESC_CONFIG, 0, (char *)&pre, sizeof(pre)) != 0) {
 		fprintf(stderr, "usb: Fail to get configuration descriptor\n");
@@ -242,12 +173,9 @@ static int usb_getConfiguration(usb_device_t *dev)
 	if ((dev->ifs = calloc(dev->nifs, sizeof(usb_interface_t))) == NULL)
 		return -ENOMEM;
 
-	usb_dumpConfigurationDescriptor(stderr, conf);
-
 	ptr = (char *)conf + sizeof(usb_configuration_desc_t);
 	for (i = 0; i < dev->nifs; i++) {
 		iface = (usb_interface_desc_t *)ptr;
-		usb_dumpInferfaceDesc(stderr, iface);
 
 		ptr += sizeof(usb_interface_desc_t);
 		/* Class and Vendor specific descriptors */
@@ -261,7 +189,6 @@ static int usb_getConfiguration(usb_device_t *dev)
 			usb_epConf(dev, ep, epDesc, i);
 			LIST_ADD(&dev->eps, ep);
 			ptr += sizeof(usb_endpoint_desc_t);
-			usb_dumpEndpointDesc(stderr, epDesc);
 		}
 		dev->ifs[i].desc = iface;
 	}
@@ -349,8 +276,6 @@ static int usb_devBind(usb_device_t *dev, int iface, usb_driver_t *drv)
 	msg_t msg;
 	usb_msg_t *umsg = (usb_msg_t *)msg.i.raw;
 
-	fprintf(stderr, "usb: Binding iface: %d to drv: %d\n", iface, drv->pid);
-
 	msg.type = mtDevCtl;
 	dev->ifs[iface].driver = drv;
 	umsg->type = usb_msg_insertion;
@@ -422,11 +347,9 @@ static usb_driver_t *usb_ifMatchDriver(usb_device_t *dev, usb_interface_t *iface
 	}
 
 	do {
-		fprintf(stderr, "ifMatchDriver: pid %d\n", drv->pid);
 		for (i = 0; i < drv->nfilters; i++) {
 			match = usb_drvcmp(&dev->desc, iface->desc, &drv->filters[i]);
 			if (match > bestmatch) {
-				fprintf(stderr, "ifMatchDrvier: Found better match: %x drv: %d\n", match, drv->pid);
 				bestmatch = match;
 				best = drv;
 			}
@@ -578,9 +501,34 @@ static void usb_deviceConnected(usb_device_t *hub, int port)
 
 static void usb_deviceDisconnected(usb_device_t *hub, int port)
 {
+	msg_t msg;
+	usb_msg_t *umsg = (usb_msg_t *)msg.i.raw;
 	usb_device_t *dev;
+	usb_endpoint_t *ep;
+	int i;
 
+	fprintf(stderr, "usb: Device disconnected\n");
 	dev = hub->devices[port - 1];
+	msg.type = mtDevCtl;
+	umsg->type = usb_msg_deletion;
+	umsg->deletion.bus = dev->hcd->num;
+	umsg->deletion.dev = dev->address;
+
+	for (i = 0; i < dev->nifs; i++) {
+		umsg->deletion.interface = i;
+		/* TODO: use non blocking version of msgSend */
+		msgSend(dev->ifs[i].driver->port, &msg);
+	}
+
+	if ((ep = dev->eps) != NULL) {
+		do {
+			if (ep->pipe != NULL) {
+				idtree_remove(&usb_common.pipes, &ep->pipe->linkage);
+				free(ep->pipe);
+			}
+		} while ((ep = ep->next) != dev->eps);
+	}
+
 	hcd_deviceRemove(hub->hcd, hub, port);
 	hcd_deviceFree(dev);
 }
@@ -590,7 +538,6 @@ static void usb_portStatusChanged(usb_device_t *hub, int port)
 {
 	usb_port_status_t status;
 
-	fprintf(stderr, "USB: PORT STATUS CHANGED\n");
 	if (hub->hubOps->getPortStatus(hub, port, &status) != 0) {
 		fprintf(stderr, "usb: getPortStatus port %d failed!\n", port);
 		return;
@@ -684,7 +631,6 @@ static int usb_handleUrb(msg_t *msg, unsigned int port, unsigned long rid)
 		fprintf(stderr, "usb: driver pid (%d) and msg pid (%d) mismatch\n", pipe->drv->pid, msg->pid);
 		return -EINVAL;
 	}
-
 
 	if ((t = calloc(1, sizeof(usb_transfer_t))) == NULL)
 		return -ENOMEM;
@@ -783,25 +729,24 @@ static int usb_handleOpen(usb_open_t *o, msg_t *msg)
 
 	ep = dev->eps;
 	do {
-		if (ep->direction == o->dir && ep->type == o->type && !ep->connected) {
-			if ((pipe = malloc(sizeof(usb_pipe_t))) == NULL)
-				return -ENOMEM;
-			idtree_alloc(&usb_common.pipes, &pipe->linkage);
-			fprintf(stderr, "usb: Opening pipe id %d ep_num: %d ep_dir: %d ep_type: %d\n", pipe->linkage.id, ep->number, ep->direction, ep->type);
-			break;
+		if (ep->direction == o->dir && ep->type == o->type) {
+			if (ep->pipe != NULL && ep->type == usb_transfer_control) {
+				pipe = ep->pipe;
+				break;
+			}
+			else if (ep->pipe == NULL) {
+				if ((pipe = malloc(sizeof(usb_pipe_t))) == NULL)
+					return -ENOMEM;
+				idtree_alloc(&usb_common.pipes, &pipe->linkage);
+				ep->pipe = pipe;
+				break;
+			}
 		}
 		ep = ep->next;
 	} while (ep != dev->eps);
 
-	if (pipe == NULL) {
-		fprintf(stderr, "usb: Fail to open pipe\n");
+	if (pipe == NULL)
 		return -EINVAL;
-	}
-
-
-	/* The control endpoint can be used by multiple drivers */
-	if (ep->number != 0)
-		ep->connected = 1;
 
 	pipe->ep = ep;
 	pipe->drv = drv;
@@ -854,9 +799,8 @@ static void usb_statusthr(void *arg)
 
 		if (h->transfer->type == usb_transfer_bulk || h->transfer->type == usb_transfer_control) {
 			h->msg.o.io.err = (h->transfer->error != 0) ? -h->transfer->error : h->transfer->transfered;
-			if (msgRespond(h->port, &h->msg, h->rid) != 0) {
-				/* Driver is dead? TODO: remove driver */
-			}
+			/* TODO: it should be non-blocking */
+			msgRespond(h->port, &h->msg, h->rid);
 			free(h->transfer);
 			free(h);
 		}

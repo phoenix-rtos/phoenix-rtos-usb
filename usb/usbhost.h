@@ -38,8 +38,8 @@ typedef struct usb_endpoint {
 	int max_packet_len;
 	int number;
 	int interval;
-	int connected;
 	int interface;
+	struct usb_pipe *pipe;
 
 	struct usb_device *device;
 	void *hcdpriv;
