@@ -7,19 +7,22 @@ static struct {
 	unsigned port;
 } usbdrv_common;
 
-int usb_connect(usb_device_id_t *id, int drvport)
+int usb_connect(const usb_device_id_t *filters, int nfilters, unsigned drvport)
 {
 	msg_t msg = { 0 };
-	usb_msg_t *usb_msg = (usb_msg_t *)&msg.i.raw;
+	usb_msg_t *umsg = (usb_msg_t *)&msg.i.raw;
 	oid_t oid;
 
 	while (lookup("/dev/usb", NULL, &oid) < 0)
 		usleep(1000000);
 
 	msg.type = mtDevCtl;
-	usb_msg->type = usb_msg_connect;
-	usb_msg->connect.port = drvport;
-	memcpy(&usb_msg->connect.filter, id, sizeof(usb_device_id_t));
+	msg.i.size = sizeof(usb_device_id_t) * nfilters;
+	msg.i.data = filters;
+
+	umsg->type = usb_msg_connect;
+	umsg->connect.port = drvport;
+	umsg->connect.nfilters = nfilters;
 
 	if (msgSend(oid.port, &msg) < 0)
 		return -1;

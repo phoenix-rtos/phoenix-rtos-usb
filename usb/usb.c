@@ -32,7 +32,7 @@
 
 
 static struct {
-	handle_t common_lock, enumeratorLock, finishedLock;
+	handle_t common_lock, enumeratorLock, finishedLock, drvsLock;
 	handle_t enumeratorCond, finishedCond;
 	hcd_t *hcds;
 	usb_driver_t *drvs;
@@ -363,57 +363,93 @@ static int usb_devBind(usb_device_t *dev, int iface, usb_driver_t *drv)
 }
 
 
-/* TODO: Handle multiple VID:PID pairs per one driver*/
 static int usb_drvcmp(usb_device_desc_t *dev, usb_interface_desc_t *iface, usb_device_id_t *filter)
 {
-	if (filter->vid != USB_CONNECT_WILDCARD && dev->idVendor != filter->vid)
-		return 0;
+	int match = usbdrv_match;
 
-	if (filter->pid != USB_CONNECT_WILDCARD && dev->idProduct != filter->pid)
-		return 0;
-
-	if (filter->dclass != USB_CONNECT_WILDCARD) {
-		if ((dev->bDeviceClass != 0 && dev->bDeviceClass != filter->dclass) ||
-		    (dev->bDeviceClass == 0 && iface->bInterfaceClass != filter->dclass))
-			return 0;
+	if (filter->dclass != USBDRV_ANY) {
+		if ((dev->bDeviceClass != 0 && dev->bDeviceClass == filter->dclass) ||
+		    (dev->bDeviceClass == 0 && iface->bInterfaceClass == filter->dclass))
+			match |= usbdrv_class_match;
+		else
+			return usbdrv_nomatch;
 	}
 
-	if (filter->subclass != USB_CONNECT_WILDCARD) {
-		if ((dev->bDeviceSubClass != 0 && dev->bDeviceSubClass != filter->subclass) ||
-		    (dev->bDeviceSubClass == 0 && iface->bInterfaceSubClass != filter->subclass))
-			return 0;
+	if (filter->subclass != USBDRV_ANY) {
+		if ((dev->bDeviceSubClass != 0 && dev->bDeviceSubClass == filter->subclass) ||
+		    (dev->bDeviceSubClass == 0 && iface->bInterfaceSubClass == filter->subclass))
+			match |= usbdrv_subclass_match;
+		else
+			return usbdrv_nomatch;
 	}
 
-	if (filter->protocol != USB_CONNECT_WILDCARD) {
-		if ((dev->bDeviceProtocol != 0 && dev->bDeviceProtocol != filter->protocol) ||
-		    (dev->bDeviceProtocol == 0 && iface->bInterfaceProtocol!= filter->protocol))
-			return 0;
+	if (filter->protocol != USBDRV_ANY) {
+		if ((dev->bDeviceProtocol != 0 && dev->bDeviceProtocol == filter->protocol) ||
+		    (dev->bDeviceProtocol == 0 && iface->bInterfaceProtocol == filter->protocol))
+			match |= usbdrv_protocol_match;
+		else
+			return usbdrv_nomatch;
 	}
 
-	return 1;
+	if (filter->vid != USBDRV_ANY) {
+		if (dev->idVendor == filter->vid)
+			match |= usbdrv_vid_match;
+		else
+			return usbdrv_nomatch;
+	}
+
+	if (filter->pid != USBDRV_ANY) {
+		if (dev->idProduct == filter->pid)
+			match |= usbdrv_pid_match;
+		else
+			return usbdrv_nomatch;
+	}
+
+	return match;
+}
+
+
+static usb_driver_t *usb_ifMatchDriver(usb_device_t *dev, usb_interface_t *iface)
+{
+	usb_driver_t *drv, *best = NULL;
+	int i, match, bestmatch = 0;
+
+	mutexLock(usb_common.drvsLock);
+	drv = usb_common.drvs;
+	if (drv == NULL) {
+		mutexUnlock(usb_common.drvsLock);
+		return NULL;
+	}
+
+	do {
+		fprintf(stderr, "ifMatchDriver: pid %d\n", drv->pid);
+		for (i = 0; i < drv->nfilters; i++) {
+			match = usb_drvcmp(&dev->desc, iface->desc, &drv->filters[i]);
+			if (match > bestmatch) {
+				fprintf(stderr, "ifMatchDrvier: Found better match: %x drv: %d\n", match, drv->pid);
+				bestmatch = match;
+				best = drv;
+			}
+		}
+	} while ((drv = drv->next) != usb_common.drvs);
+	mutexUnlock(usb_common.drvsLock);
+
+	return best;
 }
 
 
 static int usb_devMatchDrivers(usb_device_t *dev)
 {
-	usb_driver_t *drv = usb_common.drvs;
+	usb_driver_t *drv;
 	int i;
 
-	if (drv == NULL) {
-		/* TODO: make device orphaned */
-		return -1;
-	}
-
 	for (i = 0; i < dev->nifs; i++) {
-		do {
-			/* TODO: better matching */
-			if (usb_drvcmp(&dev->desc, dev->ifs[i].desc, &drv->filter)) {
-				if (usb_devBind(dev, i, drv) != 0)
-					return -1;
-				break;
-			}
-			drv = drv->next;
-		} while (drv != usb_common.drvs);
+		if ((drv = usb_ifMatchDriver(dev, &dev->ifs[i])) != NULL) {
+			usb_devBind(dev, i, drv);
+		}
+		else {
+			/* Make device orphaned */
+		}
 	}
 
 	return 0;
@@ -581,18 +617,20 @@ static void usb_portStatusChanged(usb_device_t *hub, int port)
 
 static usb_driver_t *usb_drvFind(int pid)
 {
-	usb_driver_t *drv = usb_common.drvs;
+	usb_driver_t *drv = usb_common.drvs, *res = NULL;
 
+	mutexLock(usb_common.drvsLock);
 	if (drv != NULL) {
 		do {
 			if (drv->pid == pid)
-				return drv;
+				res = drv;
 
 			drv = drv->next;
 		} while (drv != usb_common.drvs);
 	}
+	mutexUnlock(usb_common.drvsLock);
 
-	return NULL;
+	return res;
 }
 
 
@@ -681,18 +719,26 @@ static int usb_handleUrb(msg_t *msg, unsigned int port, unsigned long rid)
 }
 
 
-static int usb_handleConnect(usb_connect_t *c, unsigned pid)
+static int usb_handleConnect(msg_t *msg, usb_connect_t *c)
 {
 	usb_driver_t *drv;
 
 	if ((drv = malloc(sizeof(usb_driver_t))) == NULL)
 		return -ENOMEM;
 
-	drv->pid = pid;
-	drv->filter = c->filter;
-	drv->port = c->port;
+	if ((drv->filters = malloc(sizeof(usb_device_id_t) * c->nfilters)) == NULL) {
+		free(drv);
+		return -ENOMEM;
+	}
 
+	drv->pid = msg->pid;
+	drv->port = c->port;
+	drv->nfilters = c->nfilters;
+	memcpy(drv->filters, msg->i.data, msg->i.size);
+
+	mutexLock(usb_common.drvsLock);
 	LIST_ADD(&usb_common.drvs, drv);
+	mutexUnlock(usb_common.drvsLock);
 
 	/* TODO: handle orphaned devices */
 
@@ -838,7 +884,7 @@ static void usb_msgthr(void *arg)
 				umsg = (usb_msg_t *)msg.i.raw;
 				switch (umsg->type) {
 					case usb_msg_connect:
-						msg.o.io.err = usb_handleConnect(&umsg->connect, msg.pid);
+						msg.o.io.err = usb_handleConnect(&msg, &umsg->connect);
 						resp = 1;
 						break;
 					case usb_msg_open:
@@ -886,6 +932,11 @@ int main(int argc, char *argv[])
 	}
 
 	if (mutexCreate(&usb_common.finishedLock) != 0) {
+		fprintf(stderr, "usb: Can't create mutex!\n");
+		return -EINVAL;
+	}
+
+	if (mutexCreate(&usb_common.drvsLock) != 0) {
 		fprintf(stderr, "usb: Can't create mutex!\n");
 		return -EINVAL;
 	}
