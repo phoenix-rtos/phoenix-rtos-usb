@@ -92,14 +92,46 @@ typedef struct usb_modeswitch {
 	int scsiresp;
 } usb_modeswitch_t;
 
-int usb_modeswitchHandle(usb_insertion_t *insertion, usb_modeswitch_t *mode);
+
+int usb_modeswitchHandle(usb_insertion_t *instance, usb_modeswitch_t *mode);
+
+
 usb_modeswitch_t *usb_modeswitchFind(uint16_t vid, uint16_t pid, const usb_modeswitch_t *modes, int nmodes);
+
+
 int usb_connect(const usb_device_id_t *filters, int nfilters, unsigned drvport);
+
+
 int usb_eventsWait(int port, msg_t *msg);
+
+
 int usb_open(usb_insertion_t *dev, usb_transfer_type_t type, usb_dir_t dir);
+
+
 int usb_transferControl(unsigned pipe, usb_setup_packet_t *setup, void *data, size_t size, usb_dir_t dir);
+
+
 int usb_transferBulk(unsigned pipe, void *data, size_t size, usb_dir_t dir);
+
+
 int usb_setConfiguration(unsigned pipe, int conf);
+
+
 int usb_clearFeatureHalt(unsigned pipe, int ep);
+
+
+void usb_dumpDeviceDescriptor(FILE *stream, usb_device_desc_t *descr);
+
+
+void usb_dumpConfigurationDescriptor(FILE *stream, usb_configuration_desc_t *descr);
+
+
+void usb_dumpInferfaceDesc(FILE *stream, usb_interface_desc_t *descr);
+
+
+void usb_dumpEndpointDesc(FILE *stream, usb_endpoint_desc_t *descr);
+
+
+void usb_dumpStringDesc(FILE *stream, usb_string_desc_t *descr);
 
 #endif /* _USBDRIVER_H_ */

@@ -44,10 +44,10 @@ usb_device_t *hcd_deviceCreate(hcd_t *hcd)
 	ep0->device = dev;
 	ep0->type = usb_transfer_control;
 	ep0->direction = usb_dir_bi;
-	ep0->connected = 0;
 	ep0->interval = 0;
 	ep0->interface = 0;
 	ep0->hcdpriv = NULL;
+	ep0->pipe = NULL;
 	LIST_ADD(&dev->eps, ep0);
 
 	return dev;
@@ -79,7 +79,6 @@ void hcd_deviceFree(usb_device_t *dev)
 	if (dev->ifs != NULL)
 		free(dev->ifs);
 
-	/* TODO: free endpoints */
 	while ((ep = dev->eps) != NULL) {
 		LIST_REMOVE(&dev->eps, ep);
 		free(ep);
