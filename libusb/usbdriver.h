@@ -6,8 +6,18 @@
 #include <sys/msg.h>
 #include <posix/idtree.h>
 
-#define USB_CONNECT_WILDCARD ((unsigned)-1)
-#define USB_CONNECT_NONE ((unsigned)-2)
+#define USBDRV_ANY ((unsigned)-1)
+
+
+enum {
+	usbdrv_nomatch = 0x0,
+	usbdrv_match = 0x01,
+	usbdrv_class_match = 0x02,
+	usbdrv_subclass_match = 0x04,
+	usbdrv_protocol_match = 0x08,
+	usbdrv_vid_match = 0x10,
+	usbdrv_pid_match = 0x20
+};
 
 typedef struct {
 	unsigned vid;
@@ -20,7 +30,7 @@ typedef struct {
 
 typedef struct {
 	unsigned port;
-	usb_device_id_t filter;
+	unsigned nfilters;
 } usb_connect_t;
 
 
@@ -74,7 +84,7 @@ typedef struct {
 	};
 } usb_msg_t;
 
-int usb_connect(usb_device_id_t *id, int drvport);
+int usb_connect(const usb_device_id_t *filters, int nfilters, unsigned drvport);
 int usb_eventsWait(int port, msg_t *msg);
 int usb_open(usb_insertion_t *dev, usb_transfer_type_t type, usb_dir_t dir);
 int usb_transferControl(unsigned pipe, usb_setup_packet_t *setup, void *data, size_t size, usb_dir_t dir);

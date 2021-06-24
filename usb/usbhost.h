@@ -24,7 +24,8 @@ typedef struct usb_driver {
 	struct usb_driver *next, *prev;
 	unsigned pid;
 	unsigned port;
-	usb_device_id_t filter;
+	unsigned nfilters;
+	usb_device_id_t *filters;
 } usb_driver_t;
 
 
