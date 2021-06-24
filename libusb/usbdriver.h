@@ -84,6 +84,16 @@ typedef struct {
 	};
 } usb_msg_t;
 
+
+typedef struct usb_modeswitch {
+	uint16_t vid;
+	uint16_t pid;
+	uint8_t msg[31];
+	int scsiresp;
+} usb_modeswitch_t;
+
+int usb_modeswitchHandle(usb_insertion_t *insertion, usb_modeswitch_t *mode);
+usb_modeswitch_t *usb_modeswitchFind(uint16_t vid, uint16_t pid, const usb_modeswitch_t *modes, int nmodes);
 int usb_connect(const usb_device_id_t *filters, int nfilters, unsigned drvport);
 int usb_eventsWait(int port, msg_t *msg);
 int usb_open(usb_insertion_t *dev, usb_transfer_type_t type, usb_dir_t dir);

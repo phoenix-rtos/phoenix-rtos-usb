@@ -1,3 +1,4 @@
+#include <errno.h>
 #include <usbdriver.h>
 #include <sys/msg.h>
 #include <string.h>
@@ -18,7 +19,7 @@ int usb_connect(const usb_device_id_t *filters, int nfilters, unsigned drvport)
 
 	msg.type = mtDevCtl;
 	msg.i.size = sizeof(usb_device_id_t) * nfilters;
-	msg.i.data = filters;
+	msg.i.data = (void *)filters;
 
 	umsg->type = usb_msg_connect;
 	umsg->connect.port = drvport;
@@ -132,6 +133,7 @@ int usb_setConfiguration(unsigned pipe, int conf)
 	return usb_transferControl(pipe, &setup, NULL, 0, usb_dir_out);
 }
 
+
 int usb_clearFeatureHalt(unsigned pipe, int ep)
 {
 	usb_setup_packet_t setup = (usb_setup_packet_t) {
@@ -143,4 +145,61 @@ int usb_clearFeatureHalt(unsigned pipe, int ep)
 	};
 
 	return usb_transferControl(pipe, &setup, NULL, 0, usb_dir_out);
+}
+
+
+usb_modeswitch_t *usb_modeswitchFind(uint16_t vid, uint16_t pid, const usb_modeswitch_t *modes, int nmodes)
+{
+	int i;
+
+	for (i = 0; i < nmodes; i++) {
+		if (vid == modes[i].vid && pid == modes[i].pid)
+			return &modes[i];
+	}
+
+	return NULL;
+}
+
+
+int usb_modeswitchHandle(usb_insertion_t *insertion, usb_modeswitch_t *mode)
+{
+	int pipeCtrl, pipeIn, pipeOut;
+
+	if ((pipeCtrl = usb_open(insertion, usb_transfer_control, usb_dir_bi)) < 0)
+		return -EINVAL;
+
+	if (usb_setConfiguration(pipeCtrl, 1) != 0)
+		return -EINVAL;
+
+	if ((pipeIn = usb_open(insertion, usb_transfer_bulk, usb_dir_in)) < 0)
+		return -EINVAL;
+
+	if ((pipeOut = usb_open(insertion, usb_transfer_bulk, usb_dir_out)) < 0)
+		return -EINVAL;
+
+	fprintf(stderr, "usb: Performing modeswitch\n");
+	if (usb_transferBulk(pipeOut, mode->msg, sizeof(mode->msg), usb_dir_out) < 0)
+		return -1;
+	fprintf(stderr, "usb: modeswitch msg write success\n");
+
+#if 0
+	/* TODO: optimize switch time by using Halt Feature */
+	if (mode->scsiresp) {
+		if (usb_transferBulk(dev->pipeIn, &csw, sizeof(csw), usb_dir_in) < 0)
+			return -1;
+
+		if (csw.sig != CSW_SIG || csw.tag != ((umass_cbw_t *)m->msg)->tag || csw.status != 0) {
+			fprintf(stderr, "umass: transmit fail\n");
+			return -1;
+		}
+	}
+
+	if (usb_clearFeatureHalt(dev->pipeCtrl, 1) != 0)
+		return -1;
+
+	if (usb_clearFeatureHalt(dev->pipeCtrl, 129) != 0)
+		return -1;
+#endif
+
+	return 0;
 }
