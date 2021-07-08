@@ -15,34 +15,35 @@
 #ifndef _HCD_H_
 #define _HCD_H_
 
-#include <usbhost.h>
+#include "usbhost.h"
+#include "dev.h"
 
 #define HCD_TYPE_LEN 5
 
 typedef struct {
 	char type[HCD_TYPE_LEN];
-	uintptr_t hcdaddr, phyaddr; /* Physical addresses */
-	int irq, clk;
+	uintptr_t hcdaddr;
+	uintptr_t phyaddr;
+	int irq;
+	int clk;
 } hcd_info_t;
-
-
-typedef struct hcd hcd_t;
 
 typedef struct hcd_ops {
 	struct hcd_ops *next, *prev;
 
 	const char type[HCD_TYPE_LEN];
 
-	int (*init)(hcd_t *);
-	int (*transferEnqueue)(hcd_t *, usb_transfer_t *);
-	void (*devDestroy)(hcd_t *, usb_device_t *);
+	int (*init)(struct hcd *);
+	int (*transferEnqueue)(struct hcd *, usb_transfer_t *);
+	void (*devDestroy)(struct hcd *, usb_dev_t *);
+	uint32_t (*getRoothubStatus)(usb_dev_t *);
 } hcd_ops_t;
 
 typedef struct hcd {
 	struct hcd *prev, *next;
 	const hcd_info_t *info;
-	const hcd_ops_t *ops;
-	usb_device_t *roothub;
+	hcd_ops_t *ops;
+	usb_dev_t *roothub;
 	int num;
 
 	uint32_t addrmask[4];
@@ -57,17 +58,11 @@ void hcd_register(hcd_ops_t *ops);
 
 int hcd_getInfo(const hcd_info_t **info);
 
-int hcd_deviceAdd(hcd_t *hcd, usb_device_t *hub, usb_device_t *dev, int port);
+int hcd_addrAlloc(hcd_t *hcd);
 
-void hcd_deviceRemove(hcd_t *hcd, usb_device_t *hub, int port);
+void hcd_addrFree(hcd_t *hcd, int addr);
 
-usb_device_t *hcd_deviceCreate(hcd_t *hcd);
-
-void hcd_deviceFree(usb_device_t *dev);
-
-usb_device_t *hcd_deviceCreate(hcd_t *hcd);
-
-usb_device_t *hcd_deviceFind(hcd_t *hcd, int addr);
+usb_dev_t *hcd_devFind(hcd_t *hcdList, uint32_t locationID);
 
 hcd_t *hcd_init(void);
 

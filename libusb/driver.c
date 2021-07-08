@@ -48,7 +48,7 @@ int usb_eventsWait(int port, msg_t *msg)
 }
 
 
-int usb_open(usb_insertion_t *dev, usb_transfer_type_t type, usb_dir_t dir)
+int usb_open(usb_devinfo_t *dev, usb_transfer_type_t type, usb_dir_t dir)
 {
 	int ret;
 	msg_t msg;
@@ -63,6 +63,7 @@ int usb_open(usb_insertion_t *dev, usb_transfer_type_t type, usb_dir_t dir)
 	umsg->open.iface = dev->interface;
 	umsg->open.type = type;
 	umsg->open.dir = dir;
+	umsg->open.locationID = dev->locationID;
 
 	if ((ret = msgSend(usbdrv_common.port, &msg)) != 0)
 		return ret;
@@ -227,11 +228,11 @@ void usb_dumpStringDesc(FILE *stream, usb_string_desc_t *descr)
 }
 
 
-int usb_modeswitchHandle(usb_insertion_t *insertion, usb_modeswitch_t *mode)
+int usb_modeswitchHandle(usb_devinfo_t *insertion, usb_modeswitch_t *mode)
 {
 	int pipeCtrl, pipeIn, pipeOut;
 
-	if ((pipeCtrl = usb_open(insertion, usb_transfer_control, usb_dir_bi)) < 0)
+	if ((pipeCtrl = usb_open(insertion, usb_transfer_control, 0)) < 0)
 		return -EINVAL;
 
 	if (usb_setConfiguration(pipeCtrl, 1) != 0)
@@ -245,25 +246,6 @@ int usb_modeswitchHandle(usb_insertion_t *insertion, usb_modeswitch_t *mode)
 
 	if (usb_transferBulk(pipeOut, mode->msg, sizeof(mode->msg), usb_dir_out) < 0)
 		return -1;
-
-#if 0
-	/* TODO: optimize switch time by using Halt Feature */
-	if (mode->scsiresp) {
-		if (usb_transferBulk(dev->pipeIn, &csw, sizeof(csw), usb_dir_in) < 0)
-			return -1;
-
-		if (csw.sig != CSW_SIG || csw.tag != ((umass_cbw_t *)m->msg)->tag || csw.status != 0) {
-			fprintf(stderr, "umass: transmit fail\n");
-			return -1;
-		}
-	}
-
-	if (usb_clearFeatureHalt(dev->pipeCtrl, 1) != 0)
-		return -1;
-
-	if (usb_clearFeatureHalt(dev->pipeCtrl, 129) != 0)
-		return -1;
-#endif
 
 	return 0;
 }

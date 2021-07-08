@@ -59,6 +59,7 @@
 
 /* class codes */
 #define USB_CLASS_MASS_STORAGE	0x8
+#define USB_CLASS_HUB           0x9
 
 
 /* descriptor types */
@@ -74,6 +75,7 @@
 #define USB_DESC_TYPE_HID  0x21
 #define USB_DESC_TYPE_HID_REPORT 0x22
 #define USB_DESC_TYPE_CDC_CS_INTERFACE 0x24
+#define USB_DESC_TYPE_HUB  0x29
 
 
 /* endpoint types */
@@ -210,7 +212,6 @@ typedef enum {
 typedef enum {
 	usb_dir_out = 0,
 	usb_dir_in,
-	usb_dir_bi /* TODO: get rid of it */
 } usb_dir_t;
 
 #endif

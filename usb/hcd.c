@@ -16,86 +16,23 @@
 #include <string.h>
 #include <stdlib.h>
 
-#include <hcd.h>
-#include <usbhost.h>
+#include "usbhost.h"
+#include "dev.h"
+#include "hub.h"
+#include "hcd.h"
+
 
 static struct {
 	hcd_ops_t *hcdops;
 } hcd_common;
 
 
-usb_device_t *hcd_deviceCreate(hcd_t *hcd)
-{
-	usb_device_t *dev;
-	usb_endpoint_t *ep0;
-
-	if ((dev = calloc(1, sizeof(usb_device_t))) == NULL)
-		return NULL;
-
-	/* Create control endpoint */
-	if ((ep0 = malloc(sizeof(usb_endpoint_t))) == NULL) {
-		free(dev);
-		return NULL;
-	}
-
-	dev->hcd = hcd;
-	ep0->max_packet_len = 64; /* Default value */
-	ep0->number = 0;
-	ep0->device = dev;
-	ep0->type = usb_transfer_control;
-	ep0->direction = usb_dir_bi;
-	ep0->interval = 0;
-	ep0->interface = 0;
-	ep0->hcdpriv = NULL;
-	ep0->pipe = NULL;
-	LIST_ADD(&dev->eps, ep0);
-
-	return dev;
-}
-
-
-void hcd_deviceFree(usb_device_t *dev)
-{
-	usb_endpoint_t *ep;
-	int i;
-
-	if (dev->hcd)
-		dev->hcd->ops->devDestroy(dev->hcd, dev);
-
-	if (dev->manufacturer != NULL)
-		free(dev->manufacturer);
-	if (dev->product != NULL)
-		free(dev->product);
-	if (dev->product != NULL)
-		free(dev->serialNumber);
-	if (dev->conf != NULL)
-		free(dev->conf);
-
-	for (i = 0; i < dev->nifs; i++) {
-		if (dev->ifs[i].str != NULL)
-			free(dev->ifs[i].str);
-	}
-
-	if (dev->ifs != NULL)
-		free(dev->ifs);
-
-	while ((ep = dev->eps) != NULL) {
-		LIST_REMOVE(&dev->eps, ep);
-		free(ep);
-	}
-
-	free(dev);
-}
-
-
-int hcd_deviceAdd(hcd_t *hcd, usb_device_t *hub, usb_device_t *dev, int port)
+int hcd_addrAlloc(hcd_t *hcd)
 {
 	uint32_t b, addr;
 	int i;
 
-	if (port > hub->ndevices)
-		return -1;
-
+	/* Allocate address */
 	for (i = 0, addr = 0; i < 4; i++, addr += 32) {
 		if ((b = __builtin_ffsl(~hcd->addrmask[i])) != 0)
 			break;
@@ -107,25 +44,13 @@ int hcd_deviceAdd(hcd_t *hcd, usb_device_t *hub, usb_device_t *dev, int port)
 	addr += b - 1;
 	hcd->addrmask[i] |= 1UL << (b - 1UL);
 
-	hub->devices[port - 1] = dev;
-	dev->hub = hub;
-
 	return addr;
 }
 
 
-void hcd_deviceRemove(hcd_t *hcd, usb_device_t *hub, int port)
+void hcd_addrFree(hcd_t *hcd, int addr)
 {
-	usb_device_t *dev;
-
-	if (port > hub->ndevices)
-		return;
-
-	/* TODO: remove subdevices recursively */
-	dev = hub->devices[port - 1];
-	hub->devices[port - 1] = NULL;
-
-	hcd->addrmask[dev->address / 32] &= ~(1UL << (dev->address % 32));
+	hcd->addrmask[addr / 32] &= ~(1UL << (addr % 32));
 }
 
 
@@ -152,7 +77,7 @@ static const hcd_ops_t *hcd_lookup(const char *type)
 }
 
 
-static hcd_t *hcd_create(const hcd_ops_t *ops, const hcd_info_t *info, int num)
+static hcd_t *hcd_create(hcd_ops_t *ops, const hcd_info_t *info, int num)
 {
 	hcd_t *hcd;
 
@@ -200,29 +125,38 @@ static void hcd_free(hcd_t *hcds)
 }
 
 
-usb_device_t *hcd_deviceFind(hcd_t *hcd, int addr)
+usb_dev_t *hcd_devFind(hcd_t *hcdList, uint32_t locationID)
 {
-	usb_device_t *d = hcd->roothub;
-	int i;
+	usb_dev_t *d;
+	hcd_t *hcd = hcdList;
+	int port;
 
-	if (addr == d->address)
-		return d;
+	do {
+		if ((locationID & 0xf) == hcd->num)
+			break;
+	} while ((hcd = hcd->next) != hcdList);
 
-	/* TODO: search subdevices using locationId */
-	for (i = 0; i < d->ndevices; i++) {
-		if (addr == d->devices[i]->address)
-			return d->devices[i];
+	if ((locationID & 0xf) != hcd->num)
+		return NULL;
+	locationID >>= 4;
+
+	d = hcd->roothub;
+	while (locationID != 0) {
+		port = locationID & 0xf;
+		if (port > d->nports || d->devs[port - 1] == NULL)
+			return NULL;
+		d = d->devs[port - 1];
+		locationID >>= 4;
 	}
 
-	return NULL;
+	return d;
 }
 
 
 hcd_t *hcd_init(void)
 {
 	const hcd_info_t *info;
-	const hcd_ops_t *ops;
-	usb_device_t *hub;
+	hcd_ops_t *ops;
 	hcd_t *hcd, *res = NULL;
 	int nhcd, i;
 	int num = 1;
@@ -241,19 +175,8 @@ hcd_t *hcd_init(void)
 			return NULL;
 		}
 
-		/* Create root hub */
-		if ((hub = hcd_deviceCreate(hcd)) == NULL) {
-			hcd_free(res);
-			free(hcd);
-			return NULL;
-		}
-
-		hcd->roothub = hub;
-		hub->address = 1;
-
 		if (hcd->ops->init(hcd) != 0) {
 			hcd_free(res);
-			hcd_deviceFree(hub);
 			free(hcd);
 			return NULL;
 		}
