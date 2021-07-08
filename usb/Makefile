@@ -5,8 +5,8 @@
 #
 
 NAME := usb
-LOCAL_SRCS := usb.c hcd.c
-LOCAL_HEADERS := hcd.h hub.h usbhost.h
-LIBS := libusbehci
+LOCAL_SRCS := usb.c dev.c drv.c hcd.c hub.c
+LOCAL_HEADERS := hcd.h hub.h dev.h drv.h usbhost.h
+LIBS := libusbehci libusb
 
 include $(binary.mk)

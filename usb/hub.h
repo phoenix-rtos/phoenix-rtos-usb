@@ -16,9 +16,8 @@
 #define _HUB_H_
 
 #include <sys/types.h>
-#include <usbhost.h>
-#include <hcd.h>
 
+#include "dev.h"
 
 #define USB_PORT_STAT_CONNECTION    0x0001
 #define USB_PORT_STAT_ENABLE        0x0002
@@ -52,6 +51,7 @@
 #define USB_PORT_FEAT_TEST              21
 #define USB_PORT_FEAT_INDICATOR         22
 
+#define USB_HUB_MAX_PORTS 15
 
 typedef struct usb_port_status {
 	uint16_t wPortStatus;
@@ -59,11 +59,21 @@ typedef struct usb_port_status {
 } __attribute__ ((packed)) usb_port_status_t;
 
 
-typedef struct usb_hub_ops {
-	int (*statusChanged)(struct usb_device *dev, uint32_t *status);
-	int (*getPortStatus)(struct usb_device *dev, int port, usb_port_status_t *status);
-	int (*clearPortFeature)(struct usb_device *dev, int port, uint16_t wValue);
-	int (*setPortFeature)(struct usb_device *dev, int port, uint16_t wValue);
-} usb_hub_ops_t;
+typedef struct usb_hub_desc {
+	uint8_t bDescLength;
+	uint8_t bDescriptorType;
+	uint8_t bNbrPorts;
+	uint16_t wHubCharacteristics;
+	uint8_t bPwrOn2PwrGood;
+	uint8_t bHubContrCurrent;
+	uint8_t variable[];
+} __attribute__ ((packed)) usb_hub_desc_t;
+
+
+int hub_init(void);
+
+int hub_add(usb_dev_t *hub);
+
+void hub_remove(usb_dev_t *hub);
 
 #endif
