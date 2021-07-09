@@ -636,7 +636,7 @@ void _telit_input(ttyacm_t *acm, char *data, size_t size, int err)
 		acm->error = 1;
 	}
 	else {
-		TRACE("input %lu bytes to acm%d", size, acm->id);
+		TRACE("input %zu bytes to acm%d", size, acm->id);
 		for (i = 0; i < size && !fifo_is_full(acm->fifo); ++i)
 			fifo_push(acm->fifo, data[i]);
 
