@@ -53,7 +53,6 @@ int usb_open(usb_devinfo_t *dev, usb_transfer_type_t type, usb_dir_t dir)
 	int ret;
 	msg_t msg;
 	usb_msg_t *umsg = (usb_msg_t *)msg.i.raw;
-	int res;
 
 	msg.type = mtDevCtl;
 	umsg->type = usb_msg_open;
@@ -146,7 +145,7 @@ int usb_clearFeatureHalt(unsigned pipe, int ep)
 }
 
 
-usb_modeswitch_t *usb_modeswitchFind(uint16_t vid, uint16_t pid, const usb_modeswitch_t *modes, int nmodes)
+const usb_modeswitch_t *usb_modeswitchFind(uint16_t vid, uint16_t pid, const usb_modeswitch_t *modes, int nmodes)
 {
 	int i;
 
@@ -228,23 +227,25 @@ void usb_dumpStringDesc(FILE *stream, usb_string_desc_t *descr)
 }
 
 
-int usb_modeswitchHandle(usb_devinfo_t *insertion, usb_modeswitch_t *mode)
+int usb_modeswitchHandle(usb_devinfo_t *dev, const usb_modeswitch_t *mode)
 {
+	char msg[31];
 	int pipeCtrl, pipeIn, pipeOut;
 
-	if ((pipeCtrl = usb_open(insertion, usb_transfer_control, 0)) < 0)
+	if ((pipeCtrl = usb_open(dev, usb_transfer_control, 0)) < 0)
 		return -EINVAL;
 
 	if (usb_setConfiguration(pipeCtrl, 1) != 0)
 		return -EINVAL;
 
-	if ((pipeIn = usb_open(insertion, usb_transfer_bulk, usb_dir_in)) < 0)
+	if ((pipeIn = usb_open(dev, usb_transfer_bulk, usb_dir_in)) < 0)
 		return -EINVAL;
 
-	if ((pipeOut = usb_open(insertion, usb_transfer_bulk, usb_dir_out)) < 0)
+	if ((pipeOut = usb_open(dev, usb_transfer_bulk, usb_dir_out)) < 0)
 		return -EINVAL;
 
-	if (usb_transferBulk(pipeOut, mode->msg, sizeof(mode->msg), usb_dir_out) < 0)
+	memcpy(msg, mode->msg, sizeof(msg));
+	if (usb_transferBulk(pipeOut, msg, sizeof(msg), usb_dir_out) < 0)
 		return -1;
 
 	return 0;

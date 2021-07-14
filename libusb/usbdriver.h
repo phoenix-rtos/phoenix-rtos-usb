@@ -100,10 +100,10 @@ typedef struct usb_modeswitch {
 } usb_modeswitch_t;
 
 
-int usb_modeswitchHandle(usb_devinfo_t *instance, usb_modeswitch_t *mode);
+int usb_modeswitchHandle(usb_devinfo_t *dev, const usb_modeswitch_t *mode);
 
 
-usb_modeswitch_t *usb_modeswitchFind(uint16_t vid, uint16_t pid, const usb_modeswitch_t *modes, int nmodes);
+const usb_modeswitch_t *usb_modeswitchFind(uint16_t vid, uint16_t pid, const usb_modeswitch_t *modes, int nmodes);
 
 
 int usb_connect(const usb_device_id_t *filters, int nfilters, unsigned drvport);

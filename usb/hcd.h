@@ -29,8 +29,6 @@ typedef struct {
 } hcd_info_t;
 
 typedef struct hcd_ops {
-	struct hcd_ops *next, *prev;
-
 	const char type[HCD_TYPE_LEN];
 
 	int (*init)(struct hcd *);
@@ -42,7 +40,7 @@ typedef struct hcd_ops {
 typedef struct hcd {
 	struct hcd *prev, *next;
 	const hcd_info_t *info;
-	hcd_ops_t *ops;
+	const hcd_ops_t *ops;
 	usb_dev_t *roothub;
 	int num;
 
@@ -54,7 +52,7 @@ typedef struct hcd {
 } hcd_t;
 
 
-void hcd_register(hcd_ops_t *ops);
+void hcd_register(const hcd_ops_t *ops);
 
 int hcd_getInfo(const hcd_info_t **info);
 
