@@ -144,7 +144,10 @@ int usb_drvBind(usb_dev_t *dev)
 		if ((drv = usb_drvMatchIface(dev, &dev->ifs[i])) != NULL) {
 			dev->ifs[i].driver = drv;
 			umsg->insertion.interface = i;
+			//fprintf(stderr, "usb: Matching iface %d\n", i);
 			msgSend(drv->port, &msg);
+		} else {
+			fprintf(stderr, "usb: Fail to match iface: %d\n", i);
 		}
 	}
 
