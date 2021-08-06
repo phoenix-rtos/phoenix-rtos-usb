@@ -7,6 +7,6 @@
 NAME := usb
 LOCAL_SRCS := usb.c dev.c drv.c hcd.c hub.c
 LOCAL_HEADERS := hcd.h hub.h dev.h drv.h usbhost.h
-LIBS := libusbehci libusb
+LIBS := $(USB_HCD_LIBS) libusb
 
 include $(binary.mk)
