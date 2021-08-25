@@ -17,7 +17,9 @@
 
 #include <usb.h>
 
-enum usb_speed { usb_full_speed = 0, usb_low_speed, usb_high_speed };
+enum usb_speed { usb_full_speed = 0,
+	usb_low_speed,
+	usb_high_speed };
 
 typedef struct usb_endpoint {
 	struct usb_endpoint *prev, *next;

@@ -223,7 +223,7 @@ void usb_dumpStringDesc(FILE *stream, usb_string_desc_t *descr)
 	fprintf(stream, "STRING DESCRIPTOR:\n");
 	fprintf(stream, "\tbLength: %d\n", descr->bLength);
 	fprintf(stream, "\tbDescriptorType: 0x%x\n", descr->bDescriptorType);
-	fprintf(stream, "\twData: %.*s\n", descr->bLength - 2,  descr->wData);
+	fprintf(stream, "\twData: %.*s\n", descr->bLength - 2, descr->wData);
 }
 
 

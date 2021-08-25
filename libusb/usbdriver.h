@@ -78,8 +78,13 @@ typedef struct {
 
 
 typedef struct {
-	enum { usb_msg_connect, usb_msg_insertion, usb_msg_deletion,
-	       usb_msg_urb, usb_msg_open, usb_msg_reset, usb_msg_info } type;
+	enum { usb_msg_connect,
+		usb_msg_insertion,
+		usb_msg_deletion,
+		usb_msg_urb,
+		usb_msg_open,
+		usb_msg_reset,
+		usb_msg_info } type;
 
 	union {
 		usb_connect_t connect;

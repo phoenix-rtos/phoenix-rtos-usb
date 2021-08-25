@@ -60,7 +60,7 @@ int usb_controlTransferSync(usb_dev_t *dev, usb_dir_t dir, usb_setup_packet_t *s
 		condWait(usbdev_common.cond, usbdev_common.lock, 0);
 	mutexUnlock(usbdev_common.lock);
 
-	return (t.error == 0) ? t.transfered : -t.error;
+	return (t.error == 0) ? t.transferred : -t.error;
 }
 
 

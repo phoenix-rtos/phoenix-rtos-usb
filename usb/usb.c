@@ -103,7 +103,7 @@ static int usb_handleUrb(msg_t *msg, unsigned int port, unsigned long rid)
 	t->setup = &umsg->urb.setup;
 	t->size = umsg->urb.size;
 	t->buffer = msg->i.data;
-	t->transfered = 0;
+	t->transferred = 0;
 
 	if ((t->msg = malloc(sizeof(msg_t))) == NULL) {
 		free(t);
@@ -225,7 +225,7 @@ static void usb_statusthr(void *arg)
 		mutexUnlock(usb_common.finishedLock);
 
 		if (t->type == usb_transfer_bulk || t->type == usb_transfer_control) {
-			t->msg->o.io.err = (t->error != 0) ? -t->error : t->transfered;
+			t->msg->o.io.err = (t->error != 0) ? -t->error : t->transferred;
 			/* TODO: it should be non-blocking */
 			msgRespond(t->port, t->msg, t->rid);
 			free(t->msg);
@@ -268,7 +268,8 @@ static void usb_msgthr(void *arg)
 						if ((ret = usb_handleUrb(&msg, port, rid)) != 0) {
 							msg.o.io.err = ret;
 							resp = 1;
-						} else {
+						}
+						else {
 							resp = 0;
 						}
 						break;

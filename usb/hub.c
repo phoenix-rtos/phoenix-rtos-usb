@@ -158,7 +158,7 @@ int hub_poll(usb_dev_t *hub)
 	else if (t->finished) {
 		t->finished = 0;
 		t->error = 0;
-		t->transfered = 0;
+		t->transferred = 0;
 		hub->hcd->ops->transferEnqueue(hub->hcd, hub->statusTransfer);
 	}
 
@@ -269,7 +269,6 @@ static void hub_portStatusChanged(usb_dev_t *hub, int port)
 
 static void hub_hubStatusChanged(usb_dev_t *hub)
 {
-
 }
 
 
@@ -299,7 +298,7 @@ static uint32_t hub_getStatus(usb_dev_t *hub)
 		status = hub->hcd->ops->getRoothubStatus(hub);
 	}
 	else if (hub->statusTransfer->finished) {
-		if (hub->statusTransfer->error == 0 && hub->statusTransfer->transfered > 0)
+		if (hub->statusTransfer->error == 0 && hub->statusTransfer->transferred > 0)
 			memcpy(&status, hub->statusTransfer->buffer, sizeof(status));
 		else
 			fprintf(stderr, "usb-hub: Interrupt transfer error\n");
