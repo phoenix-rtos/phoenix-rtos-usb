@@ -183,7 +183,7 @@ static int usb_handleOpen(usb_open_t *o, msg_t *msg)
 				pipe = ep->pipe;
 				break;
 			}
-			else if (ep->pipe == NULL) {
+			else if (ep->pipe == NULL && (ep->interface == o->iface || ep->type == usb_transfer_control)) {
 				if ((pipe = malloc(sizeof(usb_pipe_t))) == NULL)
 					return -ENOMEM;
 				idtree_alloc(&usb_common.pipes, &pipe->linkage);
