@@ -15,6 +15,7 @@
 
 #include <errno.h>
 #include <sys/list.h>
+#include <sys/mman.h>
 #include <sys/msg.h>
 #include <sys/platform.h>
 #include <sys/types.h>
@@ -100,15 +101,29 @@ static int usb_handleUrb(msg_t *msg, unsigned int port, unsigned long rid)
 	t->direction = umsg->urb.dir;
 	t->ep = pipe->ep;
 	t->handler = usb_handleUrbTransfer;
-	t->setup = &umsg->urb.setup;
-	t->size = umsg->urb.size;
-	t->buffer = msg->i.data;
 	t->transferred = 0;
+	t->size = umsg->urb.size;
 
 	if ((t->msg = malloc(sizeof(msg_t))) == NULL) {
 		free(t);
 		return -ENOMEM;
 	}
+
+	if (t->size > 0) {
+		if ((t->buffer = usb_alloc(t->size)) == NULL) {
+			free(t->msg);
+			free(t);
+			return -ENOMEM;
+		}
+	}
+
+	if (t->type == usb_transfer_control) {
+		t->setup = usb_alloc(sizeof(usb_setup_packet_t));
+		memcpy(t->setup, &umsg->urb.setup, sizeof(usb_setup_packet_t));
+	}
+
+	if (t->direction == usb_dir_out && t->size > 0)
+		memcpy(t->buffer, msg->i.data, t->size);
 
 	memcpy(t->msg, msg, sizeof(msg_t));
 	t->port = port;
@@ -118,6 +133,8 @@ static int usb_handleUrb(msg_t *msg, unsigned int port, unsigned long rid)
 	if ((ret = hcd->ops->transferEnqueue(hcd, t)) != 0) {
 		free(t->msg);
 		free(t);
+		usb_free(t->buffer, t->size);
+		usb_free(t->setup, sizeof(usb_setup_packet_t));
 	}
 
 	return ret;
@@ -226,9 +243,15 @@ static void usb_statusthr(void *arg)
 
 		if (t->type == usb_transfer_bulk || t->type == usb_transfer_control) {
 			t->msg->o.io.err = (t->error != 0) ? -t->error : t->transferred;
+
+			if (t->direction == usb_dir_in)
+				memcpy(t->msg->o.data, t->buffer, t->transferred);
+
 			/* TODO: it should be non-blocking */
 			msgRespond(t->port, t->msg, t->rid);
 			free(t->msg);
+			usb_free(t->buffer, t->size);
+			usb_free(t->setup, sizeof(usb_setup_packet_t));
 			free(t);
 		}
 	}
@@ -310,6 +333,8 @@ static int usb_roothubsInit(void)
 	return 0;
 }
 
+int usb_memInit(void);
+
 
 int main(int argc, char *argv[])
 {
@@ -327,6 +352,11 @@ int main(int argc, char *argv[])
 
 	if (condCreate(&usb_common.finishedCond) != 0) {
 		fprintf(stderr, "usb: Can't create mutex!\n");
+		return -EINVAL;
+	}
+
+	if (usb_memInit() != 0) {
+		fprintf(stderr, "usb: Can't initiate memory managament!\n");
 		return -EINVAL;
 	}
 

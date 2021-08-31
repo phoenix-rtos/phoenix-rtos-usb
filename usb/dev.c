@@ -16,6 +16,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <sys/threads.h>
 #include <sys/list.h>
 
@@ -27,10 +28,13 @@
 #include "hcd.h"
 #include "hub.h"
 
+#define USBDEV_BUF_SIZE 0x200
 
 struct {
 	handle_t lock;
 	handle_t cond;
+	char *ctrlBuf;
+	char *setupBuf;
 } usbdev_common;
 
 
@@ -46,18 +50,28 @@ int usb_controlTransferSync(usb_dev_t *dev, usb_dir_t dir, usb_setup_packet_t *s
 		.ep = dev->eps,
 		.type = usb_transfer_control,
 		.direction = dir,
-		.setup = setup,
-		.buffer = buf,
+		.setup = (usb_setup_packet_t *)usbdev_common.setupBuf,
+		.buffer = usbdev_common.ctrlBuf,
 		.size = len,
 		.handler = usb_handleCtrlTransfer
 	};
 
-	if (dev->hcd->ops->transferEnqueue(dev->hcd, &t) != 0)
+	if (len > USBDEV_BUF_SIZE)
 		return -1;
 
 	mutexLock(usbdev_common.lock);
+	memcpy(usbdev_common.setupBuf, setup, sizeof(usb_setup_packet_t));
+	if (dir == usb_dir_out && len > 0)
+		memcpy(usbdev_common.ctrlBuf, buf, len);
+
+	if (dev->hcd->ops->transferEnqueue(dev->hcd, &t) != 0)
+		return -1;
+
 	while (!t.finished)
 		condWait(usbdev_common.cond, usbdev_common.lock, 0);
+
+	if (t.error == 0 && dir == usb_dir_in && len > 0)
+		memcpy(buf, usbdev_common.ctrlBuf, len);
 	mutexUnlock(usbdev_common.lock);
 
 	return (t.error == 0) ? t.transferred : -t.error;
@@ -445,6 +459,7 @@ static void usb_devUnbind(usb_dev_t *dev)
 	}
 }
 
+
 void usb_devDisconnected(usb_dev_t *dev)
 {
 	usb_devUnbind(dev);
@@ -460,9 +475,17 @@ int usb_devInit(void)
 	}
 
 	if (condCreate(&usbdev_common.cond) != 0) {
+		resourceDestroy(usbdev_common.lock);
 		fprintf(stderr, "usbdev: Can't create mutex!\n");
 		return -ENOMEM;
 	}
+
+	if ((usbdev_common.setupBuf = usb_alloc(USBDEV_BUF_SIZE)) == NULL) {
+		fprintf(stderr, "usbdev: Fail to allocate buffer!\n");
+		return -ENOMEM;
+	}
+
+	usbdev_common.ctrlBuf = usbdev_common.setupBuf + 32;
 
 	return 0;
 }

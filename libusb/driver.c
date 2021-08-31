@@ -1,12 +1,27 @@
+/*
+ * Phoenix-RTOS
+ *
+ * libusb/driver.c
+ *
+ * Copyright 2021 Phoenix Systems
+ * Author: Maciej Purski
+ *
+ * This file is part of Phoenix-RTOS.
+ *
+ * %LICENSE%
+ */
+
 #include <errno.h>
 #include <usbdriver.h>
 #include <sys/msg.h>
 #include <string.h>
 #include <unistd.h>
 
+
 static struct {
 	unsigned port;
 } usbdrv_common;
+
 
 int usb_connect(const usb_device_id_t *filters, int nfilters, unsigned drvport)
 {
@@ -50,9 +65,9 @@ int usb_eventsWait(int port, msg_t *msg)
 
 int usb_open(usb_devinfo_t *dev, usb_transfer_type_t type, usb_dir_t dir)
 {
-	int ret;
-	msg_t msg;
+	msg_t msg = { 0 };
 	usb_msg_t *umsg = (usb_msg_t *)msg.i.raw;
+	int ret;
 
 	msg.type = mtDevCtl;
 	umsg->type = usb_msg_open;
@@ -73,17 +88,23 @@ int usb_open(usb_devinfo_t *dev, usb_transfer_type_t type, usb_dir_t dir)
 
 static int usb_urbSubmitSync(usb_urb_t *urb, void *data)
 {
-	int ret;
-	msg_t msg;
+	msg_t msg = { 0 };
 	usb_msg_t *umsg = (usb_msg_t *)msg.i.raw;
+	int ret;
 
 	msg.type = mtDevCtl;
 	umsg->type = usb_msg_urb;
 
 	memcpy(&umsg->urb, urb, sizeof(usb_urb_t));
 
-	msg.i.data = data;
-	msg.i.size = urb->size;
+	if (urb->dir == usb_dir_out) {
+		msg.i.data = data;
+		msg.i.size = urb->size;
+	}
+	else {
+		msg.o.data = data;
+		msg.o.size = urb->size;
+	}
 
 	if ((ret = msgSend(usbdrv_common.port, &msg)) != 0)
 		return ret;

@@ -55,4 +55,16 @@ typedef struct usb_transfer {
 
 void usb_pipeFree(usb_pipe_t *pipe);
 
+
+void *usb_alloc(size_t size);
+
+
+void usb_free(void *addr, size_t size);
+
+
+void *usb_allocAligned(size_t size, size_t alignment);
+
+
+void usb_freeAligned(void *addr, size_t size);
+
 #endif

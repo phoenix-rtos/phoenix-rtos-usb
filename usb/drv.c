@@ -84,7 +84,6 @@ static usb_driver_t *usb_drvMatchIface(usb_dev_t *dev, usb_iface_t *iface)
 	mutexLock(usbdrv_common.lock);
 	drv = usbdrv_common.drvs;
 	if (drv == NULL) {
-		fprintf(stderr, "drv: No drv availablr\n");
 		mutexUnlock(usbdrv_common.lock);
 		return NULL;
 	}
@@ -106,7 +105,7 @@ static usb_driver_t *usb_drvMatchIface(usb_dev_t *dev, usb_iface_t *iface)
 
 int usb_drvUnbind(usb_dev_t *dev)
 {
-	msg_t msg;
+	msg_t msg = { 0 };
 	usb_msg_t *umsg = (usb_msg_t *)msg.i.raw;
 	int i;
 
@@ -129,7 +128,7 @@ int usb_drvUnbind(usb_dev_t *dev)
 int usb_drvBind(usb_dev_t *dev)
 {
 	usb_driver_t *drv;
-	msg_t msg;
+	msg_t msg = { 0 };
 	usb_msg_t *umsg = (usb_msg_t *)msg.i.raw;
 	int i;
 

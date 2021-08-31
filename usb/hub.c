@@ -40,7 +40,7 @@ struct {
 } hub_common;
 
 
-static void hub_handleTranfer(usb_transfer_t *t)
+static void hub_handleTransfer(usb_transfer_t *t)
 {
 	condSignal(hub_common.cond);
 }
@@ -103,7 +103,6 @@ static int hub_getPortStatus(usb_dev_t *hub, int port, usb_port_status_t *status
 
 static int hub_clearPortFeature(usb_dev_t *hub, int port, uint16_t wValue)
 {
-	int ret;
 	usb_setup_packet_t setup = (usb_setup_packet_t) {
 		.bmRequestType = REQUEST_DIR_HOST2DEV | REQUEST_TYPE_CLASS | REQUEST_RECIPIENT_OTHER,
 		.bRequest = REQ_CLEAR_FEATURE,
@@ -112,9 +111,7 @@ static int hub_clearPortFeature(usb_dev_t *hub, int port, uint16_t wValue)
 		.wLength = 0
 	};
 
-	ret = usb_controlTransferSync(hub, usb_dir_out, &setup, NULL, 0);
-
-	return ret;
+	return usb_controlTransferSync(hub, usb_dir_out, &setup, NULL, 0);
 }
 
 
@@ -142,7 +139,7 @@ int hub_poll(usb_dev_t *hub)
 			return -ENOMEM;
 		}
 
-		if ((t->buffer = calloc(1, sizeof(uint32_t))) == NULL) {
+		if ((t->buffer = usb_alloc(sizeof(uint32_t))) == NULL) {
 			free(t);
 			fprintf(stderr, "hub: Out of memory!\n");
 			return -ENOMEM;
@@ -150,7 +147,7 @@ int hub_poll(usb_dev_t *hub)
 		t->type = usb_transfer_interrupt;
 		t->direction = usb_dir_in;
 		t->ep = hub->eps->next;
-		t->handler = hub_handleTranfer;
+		t->handler = hub_handleTransfer;
 		t->size = hub->nports / 8 + 1;
 		hub->statusTransfer = t;
 		hub->hcd->ops->transferEnqueue(hub->hcd, hub->statusTransfer);
@@ -334,6 +331,10 @@ void hub_remove(usb_dev_t *hub)
 {
 	LIST_REMOVE(&hub_common.hubs, hub);
 	hub_common.restart = 1;
+	if (hub->statusTransfer != NULL) {
+		usb_free(hub->statusTransfer->buffer, sizeof(uint32_t));
+		free(hub->statusTransfer);
+	}
 }
 
 

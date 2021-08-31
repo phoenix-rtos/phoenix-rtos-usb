@@ -1,3 +1,19 @@
+
+/*
+ * Phoenix-RTOS
+ *
+ * Libusb driver interface
+ *
+ * libusb/usbdriver.h
+ *
+ * Copyright 2021 Phoenix Systems
+ * Author: Maciej Purski
+ *
+ * This file is part of Phoenix-RTOS.
+ *
+ * %LICENSE%
+ */
+
 #ifndef _USBDRIVER_H_
 #define _USBDRIVER_H_
 
