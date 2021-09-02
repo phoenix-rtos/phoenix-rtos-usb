@@ -40,7 +40,7 @@ struct {
 } hub_common;
 
 
-static void hub_handleTransfer(usb_transfer_t *t)
+void hub_interrupt(void)
 {
 	condSignal(hub_common.cond);
 }
@@ -56,8 +56,9 @@ static int hub_getDesc(usb_dev_t *hub, char *buf, size_t len)
 		.wLength = len,
 	};
 
-	return usb_controlTransferSync(hub, usb_dir_in, &setup, buf, len);
+	return usb_devCtrl(hub, usb_dir_in, &setup, buf, len);
 }
+
 
 static int hub_setConf(usb_dev_t *hub, int conf)
 {
@@ -69,7 +70,7 @@ static int hub_setConf(usb_dev_t *hub, int conf)
 		.wLength = 0,
 	};
 
-	return usb_controlTransferSync(hub, usb_dir_out, &setup, NULL, 0);
+	return usb_devCtrl(hub, usb_dir_out, &setup, NULL, 0);
 }
 
 
@@ -83,7 +84,7 @@ static int hub_setPortPower(usb_dev_t *hub, int port)
 		.wLength = 0
 	};
 
-	return usb_controlTransferSync(hub, usb_dir_out, &setup, NULL, 0);
+	return usb_devCtrl(hub, usb_dir_out, &setup, NULL, 0);
 }
 
 
@@ -97,7 +98,7 @@ static int hub_getPortStatus(usb_dev_t *hub, int port, usb_port_status_t *status
 		.wLength = sizeof(usb_port_status_t)
 	};
 
-	return usb_controlTransferSync(hub, usb_dir_in, &setup, (char *)status, sizeof(usb_port_status_t));
+	return usb_devCtrl(hub, usb_dir_in, &setup, (char *)status, sizeof(usb_port_status_t));
 }
 
 
@@ -111,7 +112,7 @@ static int hub_clearPortFeature(usb_dev_t *hub, int port, uint16_t wValue)
 		.wLength = 0
 	};
 
-	return usb_controlTransferSync(hub, usb_dir_out, &setup, NULL, 0);
+	return usb_devCtrl(hub, usb_dir_out, &setup, NULL, 0);
 }
 
 
@@ -125,7 +126,7 @@ static int hub_setPortFeature(usb_dev_t *hub, int port, uint16_t wValue)
 		.wLength = 0
 	};
 
-	return usb_controlTransferSync(hub, usb_dir_out, &setup, NULL, 0);
+	return usb_devCtrl(hub, usb_dir_out, &setup, NULL, 0);
 }
 
 
@@ -147,7 +148,6 @@ int hub_poll(usb_dev_t *hub)
 		t->type = usb_transfer_interrupt;
 		t->direction = usb_dir_in;
 		t->ep = hub->eps->next;
-		t->handler = hub_handleTransfer;
 		t->size = hub->nports / 8 + 1;
 		hub->statusTransfer = t;
 		hub->hcd->ops->transferEnqueue(hub->hcd, hub->statusTransfer);

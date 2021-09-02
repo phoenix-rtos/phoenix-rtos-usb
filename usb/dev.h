@@ -17,6 +17,8 @@
 
 #include <usb.h>
 
+#include "usbhost.h"
+
 enum usb_speed { usb_full_speed = 0,
 	usb_low_speed,
 	usb_high_speed };
@@ -74,15 +76,23 @@ typedef struct usb_dev {
 } usb_dev_t;
 
 
-int usb_controlTransferSync(usb_dev_t *dev, usb_dir_t dir, usb_setup_packet_t *setup, char *buf, size_t len);
+int usb_devCtrl(usb_dev_t *dev, usb_dir_t dir, usb_setup_packet_t *setup, char *buf, size_t len);
+
+
+void usb_devCtrlFinished(usb_transfer_t *t);
+
 
 usb_dev_t *usb_devAlloc(void);
 
+
 void usb_devFree(usb_dev_t *dev);
+
 
 int usb_devEnumerate(usb_dev_t *dev);
 
+
 void usb_devDisconnected(usb_dev_t *dev);
+
 
 int usb_devInit(void);
 

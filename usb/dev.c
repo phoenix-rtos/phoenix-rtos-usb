@@ -38,13 +38,13 @@ struct {
 } usbdev_common;
 
 
-static void usb_handleCtrlTransfer(usb_transfer_t *t)
+void usb_devCtrlFinished(usb_transfer_t *t)
 {
 	condSignal(usbdev_common.cond);
 }
 
 
-int usb_controlTransferSync(usb_dev_t *dev, usb_dir_t dir, usb_setup_packet_t *setup, char *buf, size_t len)
+int usb_devCtrl(usb_dev_t *dev, usb_dir_t dir, usb_setup_packet_t *setup, char *buf, size_t len)
 {
 	usb_transfer_t t = (usb_transfer_t) {
 		.ep = dev->eps,
@@ -53,7 +53,6 @@ int usb_controlTransferSync(usb_dev_t *dev, usb_dir_t dir, usb_setup_packet_t *s
 		.setup = (usb_setup_packet_t *)usbdev_common.setupBuf,
 		.buffer = usbdev_common.ctrlBuf,
 		.size = len,
-		.handler = usb_handleCtrlTransfer
 	};
 
 	if (len > USBDEV_BUF_SIZE)
@@ -107,7 +106,7 @@ static int usb_getDescriptor(usb_dev_t *dev, int descriptor, int index, char *bu
 		.wLength = len,
 	};
 
-	return usb_controlTransferSync(dev, usb_dir_in, &setup, buffer, len);
+	return usb_devCtrl(dev, usb_dir_in, &setup, buffer, len);
 }
 
 
@@ -121,7 +120,7 @@ static int usb_setAddress(usb_dev_t *dev, int address)
 		.wLength = 0
 	};
 
-	if (usb_controlTransferSync(dev, usb_dir_out, &setup, NULL, 0) < 0)
+	if (usb_devCtrl(dev, usb_dir_out, &setup, NULL, 0) < 0)
 		return -1;
 
 	dev->address = address;

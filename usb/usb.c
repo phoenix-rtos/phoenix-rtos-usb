@@ -53,6 +53,17 @@ static void usb_handleUrbTransfer(usb_transfer_t *t)
 	mutexUnlock(usb_common.finishedLock);
 }
 
+/* Called by the hcd driver */
+void usb_transferFinished(usb_transfer_t *t)
+{
+	if (t->msg != NULL)
+		usb_handleUrbTransfer(t);
+	else if (t->type == usb_transfer_interrupt)
+		hub_interrupt();
+	else
+		usb_devCtrlFinished(t);
+}
+
 
 static int usb_devsList(char *buffer, size_t size)
 {
@@ -100,7 +111,6 @@ static int usb_handleUrb(msg_t *msg, unsigned int port, unsigned long rid)
 	t->type = pipe->ep->type;
 	t->direction = umsg->urb.dir;
 	t->ep = pipe->ep;
-	t->handler = usb_handleUrbTransfer;
 	t->transferred = 0;
 	t->size = umsg->urb.size;
 

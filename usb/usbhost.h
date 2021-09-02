@@ -48,8 +48,6 @@ typedef struct usb_transfer {
 	msg_t *msg;
 	unsigned int port;
 
-	void (*handler)(struct usb_transfer *);
-
 	void *hcdpriv;
 } usb_transfer_t;
 
@@ -66,5 +64,8 @@ void *usb_allocAligned(size_t size, size_t alignment);
 
 
 void usb_freeAligned(void *addr, size_t size);
+
+
+void usb_transferFinished(usb_transfer_t *t);
 
 #endif
