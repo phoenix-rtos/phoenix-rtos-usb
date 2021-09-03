@@ -33,15 +33,15 @@
 #include "hcd.h"
 #include "hub.h"
 
+
 static struct {
 	handle_t commonLock, finishedLock, drvsLock;
 	handle_t finishedCond;
 	hcd_t *hcds;
-	usb_driver_t *drvs;
+	usb_drv_t *drvs;
 	usb_transfer_t *finished;
 	int nhcd;
 	uint32_t port;
-	idtree_t pipes;
 } usb_common;
 
 
@@ -52,6 +52,7 @@ static void usb_handleUrbTransfer(usb_transfer_t *t)
 	condSignal(usb_common.finishedCond);
 	mutexUnlock(usb_common.finishedLock);
 }
+
 
 /* Called by the hcd driver */
 void usb_transferFinished(usb_transfer_t *t)
@@ -73,17 +74,10 @@ static int usb_devsList(char *buffer, size_t size)
 
 static usb_iface_t *usb_ifaceFind(usb_dev_t *dev, int num)
 {
-	/* TODO: it shall not be needed, we should remove iface structure */
 	if (num >= dev->nifs)
 		return NULL;
 
 	return &dev->ifs[num];
-}
-
-
-static usb_pipe_t *usb_pipeFind(int pipe)
-{
-	return lib_treeof(usb_pipe_t, linkage, idtree_find(&usb_common.pipes, pipe));
 }
 
 
@@ -92,25 +86,26 @@ static int usb_handleUrb(msg_t *msg, unsigned int port, unsigned long rid)
 	usb_msg_t *umsg = (usb_msg_t *)msg->i.raw;
 	hcd_t *hcd;
 	usb_pipe_t *pipe;
+	usb_drv_t *drv;
 	usb_transfer_t *t;
 	int ret = 0;
 
-	if ((pipe = usb_pipeFind(umsg->urb.pipe)) == NULL) {
-		fprintf(stderr, "usb: Fail to find pipe: %d\n", umsg->urb.pipe);
+	if ((drv = usb_drvFind(msg->pid)) == NULL) {
+		fprintf(stderr, "usb: driver pid %d does not exist!\n", drv->pid);
 		return -EINVAL;
 	}
 
-	if (pipe->drv->pid != msg->pid) {
-		fprintf(stderr, "usb: driver pid (%d) and msg pid (%d) mismatch\n", pipe->drv->pid, msg->pid);
+	if ((pipe = usb_drvPipeFind(drv, umsg->urb.pipe)) == NULL) {
+		fprintf(stderr, "usb: Fail to find pipe: %d\n", umsg->urb.pipe);
 		return -EINVAL;
 	}
 
 	if ((t = calloc(1, sizeof(usb_transfer_t))) == NULL)
 		return -ENOMEM;
 
-	t->type = pipe->ep->type;
+	t->type = pipe->type;
 	t->direction = umsg->urb.dir;
-	t->ep = pipe->ep;
+	t->pipe = pipe;
 	t->transferred = 0;
 	t->size = umsg->urb.size;
 
@@ -139,7 +134,7 @@ static int usb_handleUrb(msg_t *msg, unsigned int port, unsigned long rid)
 	t->port = port;
 	t->rid = rid;
 
-	hcd = pipe->ep->device->hcd;
+	hcd = pipe->dev->hcd;
 	if ((ret = hcd->ops->transferEnqueue(hcd, t)) != 0) {
 		free(t->msg);
 		free(t);
@@ -153,9 +148,9 @@ static int usb_handleUrb(msg_t *msg, unsigned int port, unsigned long rid)
 
 static int usb_handleConnect(msg_t *msg, usb_connect_t *c)
 {
-	usb_driver_t *drv;
+	usb_drv_t *drv;
 
-	if ((drv = malloc(sizeof(usb_driver_t))) == NULL)
+	if ((drv = malloc(sizeof(usb_drv_t))) == NULL)
 		return -ENOMEM;
 
 	if ((drv->filters = malloc(sizeof(usb_device_id_t) * c->nfilters)) == NULL) {
@@ -179,9 +174,8 @@ static int usb_handleOpen(usb_open_t *o, msg_t *msg)
 {
 	usb_dev_t *dev;
 	usb_iface_t *iface;
-	usb_driver_t *drv;
-	usb_pipe_t *pipe = NULL;
-	usb_endpoint_t *ep;
+	usb_drv_t *drv;
+	int pipe;
 
 	if ((drv = usb_drvFind(msg->pid)) == NULL) {
 		fprintf(stderr, "usb: Fail to find driver pid: %d\n", msg->pid);
@@ -203,39 +197,12 @@ static int usb_handleOpen(usb_open_t *o, msg_t *msg)
 		return -EINVAL;
 	}
 
-	ep = dev->eps;
-	do {
-		if (ep->direction == o->dir && ep->type == o->type) {
-			if (ep->pipe != NULL && ep->type == usb_transfer_control) {
-				pipe = ep->pipe;
-				break;
-			}
-			else if (ep->pipe == NULL && (ep->interface == o->iface || ep->type == usb_transfer_control)) {
-				if ((pipe = malloc(sizeof(usb_pipe_t))) == NULL)
-					return -ENOMEM;
-				idtree_alloc(&usb_common.pipes, &pipe->linkage);
-				ep->pipe = pipe;
-				break;
-			}
-		}
-		ep = ep->next;
-	} while (ep != dev->eps);
-
-	if (pipe == NULL)
+	if ((pipe = usb_drvPipeOpen(drv, dev, iface, o->dir, o->type)) < 0)
 		return -EINVAL;
 
-	pipe->ep = ep;
-	pipe->drv = drv;
-	*(int *)msg->o.raw = pipe->linkage.id;
+	*(int *)msg->o.raw = pipe;
 
 	return 0;
-}
-
-
-void usb_pipeFree(usb_pipe_t *pipe)
-{
-	idtree_remove(&usb_common.pipes, &pipe->linkage);
-	free(pipe);
 }
 
 
@@ -343,6 +310,7 @@ static int usb_roothubsInit(void)
 	return 0;
 }
 
+
 int usb_memInit(void);
 
 
@@ -384,8 +352,6 @@ int main(int argc, char *argv[])
 		fprintf(stderr, "usb: Can't create port!\n");
 		return -EINVAL;
 	}
-
-	idtree_init(&usb_common.pipes);
 
 	oid.port = usb_common.port;
 	oid.id = 0;

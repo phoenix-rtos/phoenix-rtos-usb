@@ -23,29 +23,14 @@ enum usb_speed { usb_full_speed = 0,
 	usb_low_speed,
 	usb_high_speed };
 
-typedef struct usb_endpoint {
-	struct usb_endpoint *prev, *next;
-
-	usb_transfer_type_t type;
-	usb_dir_t direction;
-
-	int maxPacketLen;
-	int number;
-	int interval;
-	int interface;
-	struct usb_pipe *pipe;
-
-	struct usb_dev *device;
-	void *hcdpriv;
-} usb_endpoint_t;
-
 
 typedef struct usb_iface {
 	usb_interface_desc_t *desc;
+	usb_endpoint_desc_t *eps;
 	void *classDesc;
 	char *str;
 
-	struct usb_driver *driver;
+	struct usb_drv *driver;
 } usb_iface_t;
 
 
@@ -62,7 +47,7 @@ typedef struct usb_dev {
 	uint32_t locationID;
 	struct usb_iface *ifs;
 	int nifs;
-	usb_endpoint_t *eps;
+	usb_pipe_t *ctrlPipe;
 
 	struct hcd *hcd;
 	struct usb_dev *hub;

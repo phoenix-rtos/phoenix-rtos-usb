@@ -22,14 +22,22 @@
 
 typedef struct usb_pipe {
 	idnode_t linkage;
-	struct usb_driver *drv;
-	struct usb_endpoint *ep;
+	struct usb_drv *drv;
+
+	usb_transfer_type_t type;
+	usb_dir_t dir;
+
+	int maxPacketLen;
+	int interval;
+	int num;
+	struct usb_dev *dev;
+	void *hcdpriv;
 } usb_pipe_t;
 
 
 typedef struct usb_transfer {
 	struct usb_transfer *next, *prev;
-	struct usb_endpoint *ep;
+	struct usb_pipe *pipe;
 	usb_setup_packet_t *setup;
 
 	unsigned async;
@@ -50,6 +58,7 @@ typedef struct usb_transfer {
 
 	void *hcdpriv;
 } usb_transfer_t;
+
 
 void usb_pipeFree(usb_pipe_t *pipe);
 

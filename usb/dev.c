@@ -47,7 +47,7 @@ void usb_devCtrlFinished(usb_transfer_t *t)
 int usb_devCtrl(usb_dev_t *dev, usb_dir_t dir, usb_setup_packet_t *setup, char *buf, size_t len)
 {
 	usb_transfer_t t = (usb_transfer_t) {
-		.ep = dev->eps,
+		.pipe = dev->ctrlPipe,
 		.type = usb_transfer_control,
 		.direction = dir,
 		.setup = (usb_setup_packet_t *)usbdev_common.setupBuf,
@@ -74,25 +74,6 @@ int usb_devCtrl(usb_dev_t *dev, usb_dir_t dir, usb_setup_packet_t *setup, char *
 	mutexUnlock(usbdev_common.lock);
 
 	return (t.error == 0) ? t.transferred : -t.error;
-}
-
-
-static void usb_epConf(usb_dev_t *dev, usb_endpoint_t *ep, usb_endpoint_desc_t *desc, int interface)
-{
-	/* TODO: this should be not necessary, as we are copying descriptor data */
-	/* TODO: use only PIPE abstraction - it shall contain all the host internal data,
-	 * such as hcdpriv, speed, etc. and pointer to the descriptor.
-	 */
-	/* TODO: consider removing "interface structure" */
-	ep->device = dev;
-	ep->number = desc->bEndpointAddress & 0xF;
-	ep->direction = (desc->bEndpointAddress & 0x80) ? usb_dir_in : usb_dir_out;
-	ep->maxPacketLen = desc->wMaxPacketSize;
-	ep->type = desc->bmAttributes & 0x3;
-	ep->interval = desc->bInterval;
-	ep->hcdpriv = NULL;
-	ep->interface = interface;
-	ep->pipe = NULL;
 }
 
 
@@ -132,27 +113,22 @@ static int usb_setAddress(usb_dev_t *dev, int address)
 usb_dev_t *usb_devAlloc(void)
 {
 	usb_dev_t *dev;
-	usb_endpoint_t *ep0;
+	usb_pipe_t *ctrlPipe;
 
 	if ((dev = calloc(1, sizeof(usb_dev_t))) == NULL)
 		return NULL;
 
 	/* Create control endpoint */
-	if ((ep0 = malloc(sizeof(usb_endpoint_t))) == NULL) {
+	if ((ctrlPipe = calloc(1, sizeof(usb_pipe_t))) == NULL) {
 		free(dev);
 		return NULL;
 	}
 
-	ep0->maxPacketLen = 64; /* Default value */
-	ep0->number = 0;
-	ep0->device = dev;
-	ep0->type = usb_transfer_control;
-	ep0->direction = 0;
-	ep0->interval = 0;
-	ep0->interface = 0;
-	ep0->hcdpriv = NULL;
-	ep0->pipe = NULL;
-	LIST_ADD(&dev->eps, ep0);
+	ctrlPipe->maxPacketLen = 64;
+	ctrlPipe->num = 0;
+	ctrlPipe->dev = dev;
+	ctrlPipe->type = usb_transfer_control;
+	dev->ctrlPipe = ctrlPipe;
 
 	return dev;
 }
@@ -160,35 +136,24 @@ usb_dev_t *usb_devAlloc(void)
 
 void usb_devFree(usb_dev_t *dev)
 {
-	usb_endpoint_t *ep;
 	int i;
 
-	if (dev->manufacturer != NULL)
-		free(dev->manufacturer);
-	if (dev->product != NULL)
-		free(dev->product);
-	if (dev->product != NULL)
-		free(dev->serialNumber);
-	if (dev->conf != NULL)
-		free(dev->conf);
+	free(dev->manufacturer);
+	free(dev->product);
+	free(dev->serialNumber);
+	free(dev->conf);
 
 	for (i = 0; i < dev->nifs; i++) {
-		if (dev->ifs[i].str != NULL)
-			free(dev->ifs[i].str);
+		free(dev->ifs[i].str);
 	}
 
-	if (dev->ifs != NULL)
-		free(dev->ifs);
+	free(dev->ifs);
 
-	while ((ep = dev->eps) != NULL) {
-		LIST_REMOVE(&dev->eps, ep);
-		free(ep);
-	}
+	dev->hcd->ops->pipeDestroy(dev->hcd, dev->ctrlPipe);
+	free(dev->ctrlPipe);
 
-	if (dev->statusTransfer) {
-		free(dev->statusTransfer->buffer);
-		free(dev->statusTransfer);
-	}
+	free(dev->statusTransfer->buffer);
+	free(dev->statusTransfer);
 
 	free(dev);
 }
@@ -196,23 +161,12 @@ void usb_devFree(usb_dev_t *dev)
 
 static void usb_devDestroy(usb_dev_t *dev)
 {
-	usb_endpoint_t *ep;
 	int i;
-
-	if ((ep = dev->eps) != NULL) {
-		do {
-			if (ep->pipe != NULL)
-				usb_pipeFree(ep->pipe);
-		} while ((ep = ep->next) != dev->eps);
-	}
 
 	for (i = 0; i < dev->nports; i++) {
 		if (dev->devs[i] != NULL)
 			usb_devDestroy(dev->devs[i]);
 	}
-
-	if (dev->hcd)
-		dev->hcd->ops->devDestroy(dev->hcd, dev);
 
 	if (dev->address != 0)
 		hcd_addrFree(dev->hcd, dev->address);
@@ -254,12 +208,10 @@ static int usb_getDevDesc(usb_dev_t *dev)
 
 static int usb_getConfiguration(usb_dev_t *dev)
 {
-	int i, j;
 	usb_configuration_desc_t pre, *conf;
 	usb_interface_desc_t *iface;
-	usb_endpoint_desc_t *epDesc;
-	usb_endpoint_t *ep;
 	char *ptr;
+	int i;
 
 	/* Get first nine bytes to get to know configuration len */
 	if (usb_getDescriptor(dev, USB_DESC_CONFIG, 0, (char *)&pre, sizeof(pre)) < 0) {
@@ -284,20 +236,18 @@ static int usb_getConfiguration(usb_dev_t *dev)
 	ptr = (char *)conf + sizeof(usb_configuration_desc_t);
 	for (i = 0; i < dev->nifs; i++) {
 		iface = (usb_interface_desc_t *)ptr;
+		usb_dumpInferfaceDesc(stderr, iface);
 		ptr += sizeof(usb_interface_desc_t);
 		/* Class and Vendor specific descriptors */
-		/* TODO: handle them properly */
-		while (ptr[1] != USB_DESC_ENDPOINT) {
+		/* TODO: save them to allow drivers access */
+		while (ptr[1] != USB_DESC_ENDPOINT && ptr < (char *)conf + pre.wTotalLength)
 			ptr += ptr[0];
-		}
-		for (j = 0; j < iface->bNumEndpoints; j++) {
-			ep = malloc(sizeof(usb_endpoint_t));
-			epDesc = (usb_endpoint_desc_t *)ptr;
-			usb_epConf(dev, ep, epDesc, i);
-			LIST_ADD(&dev->eps, ep);
-			ptr += sizeof(usb_endpoint_desc_t);
-		}
+		if (ptr >= (char *)conf + pre.wTotalLength)
+			break;
+		dev->ifs[i].eps = (usb_endpoint_desc_t *)ptr;
 		dev->ifs[i].desc = iface;
+		while (ptr < (char *)conf + pre.wTotalLength && ptr[1] == USB_DESC_ENDPOINT)
+			ptr += sizeof(usb_endpoint_desc_t);
 	}
 
 	dev->conf = conf;
@@ -394,7 +344,7 @@ int usb_devEnumerate(usb_dev_t *dev)
 	}
 
 	/* First one is always control */
-	dev->eps->maxPacketLen = dev->desc.bMaxPacketSize0;
+	dev->ctrlPipe->maxPacketLen = dev->desc.bMaxPacketSize0;
 
 	if ((addr = hcd_addrAlloc(dev->hcd)) < 0) {
 		fprintf(stderr, "usb: Fail to add device to hcd\n");
@@ -447,10 +397,14 @@ static void usb_devUnbind(usb_dev_t *dev)
 	int i;
 
 	fprintf(stderr, "usb: Device disconnected addr %d locationID: %08x\n", dev->address, dev->locationID);
-	if (dev->desc.bDeviceClass == USB_CLASS_HUB)
+	if (dev->desc.bDeviceClass == USB_CLASS_HUB) {
 		hub_remove(dev);
-	else
-		usb_drvUnbind(dev);
+	} else {
+		for (i = 0; i < dev->nifs; i++) {
+			if (dev->ifs[i].driver)
+				usb_drvUnbind(dev->ifs[i].driver, dev, i);
+		}
+	}
 
 	for (i = 0; i < dev->nports; i++) {
 		if (dev->devs[i] != NULL)

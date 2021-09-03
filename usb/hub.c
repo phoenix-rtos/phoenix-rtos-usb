@@ -147,7 +147,8 @@ int hub_poll(usb_dev_t *hub)
 		}
 		t->type = usb_transfer_interrupt;
 		t->direction = usb_dir_in;
-		t->ep = hub->eps->next;
+		//t->ep = hub->eps->next;
+		/* TODO: rethink hubs, maybe still consider them as drivers? */
 		t->size = hub->nports / 8 + 1;
 		hub->statusTransfer = t;
 		hub->hcd->ops->transferEnqueue(hub->hcd, hub->statusTransfer);

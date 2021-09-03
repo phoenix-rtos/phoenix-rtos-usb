@@ -16,6 +16,9 @@
 #include <sys/msg.h>
 #include <sys/threads.h>
 #include <sys/list.h>
+#include <stdlib.h>
+#include <posix/utils.h>
+#include <string.h>
 
 #include <usb.h>
 #include <usbdriver.h>
@@ -26,8 +29,77 @@
 struct {
 	handle_t lock;
 	handle_t cond;
-	usb_driver_t *drvs;
+	usb_drv_t *drvs;
 } usbdrv_common;
+
+
+void usb_drvPipeFree(usb_drv_t *drv, usb_pipe_t *pipe)
+{
+	idtree_remove(&drv->pipes, &pipe->linkage);
+	free(pipe);
+}
+
+
+usb_pipe_t *usb_drvPipeFind(usb_drv_t *drv, int pipe)
+{
+	return lib_treeof(usb_pipe_t, linkage, idtree_find(&drv->pipes, pipe));
+}
+
+
+static int usb_pipeAdd(usb_drv_t *drv, usb_pipe_t *pipe)
+{
+	if (idtree_alloc(&drv->pipes, &pipe->linkage) < 0)
+		return -1;
+
+	return pipe->linkage.id;
+}
+
+
+static usb_pipe_t *usb_pipeAlloc(usb_drv_t *drv, usb_dev_t *dev, usb_endpoint_desc_t *desc)
+{
+	usb_pipe_t *pipe;
+
+	if ((pipe = malloc(sizeof(usb_pipe_t))) == NULL)
+		return NULL;
+
+	pipe->dev = dev;
+	pipe->num = desc->bEndpointAddress & 0xF;
+	pipe->dir = (desc->bEndpointAddress & 0x80) ? usb_dir_in : usb_dir_out;
+	pipe->maxPacketLen = desc->wMaxPacketSize;
+	pipe->type = desc->bmAttributes & 0x3;
+	pipe->interval = desc->bInterval;
+	pipe->hcdpriv = NULL;
+	pipe->drv = drv;
+
+	return pipe;
+}
+
+
+int usb_drvPipeOpen(usb_drv_t *drv, usb_dev_t *dev, usb_iface_t *iface, int dir, int type)
+{
+	usb_endpoint_desc_t *desc = iface->eps;
+	usb_pipe_t *pipe;
+	int i;
+
+	if (type == usb_transfer_control) {
+		if ((pipe = malloc(sizeof(usb_pipe_t))) == NULL)
+			return -ENOMEM;
+		memcpy(pipe, dev->ctrlPipe, sizeof(usb_pipe_t));
+		pipe->hcdpriv = NULL;
+
+		return usb_pipeAdd(drv, pipe);
+	}
+
+	for (i = 0; i < iface->desc->bNumEndpoints; i++) {
+		if ((desc[i].bmAttributes & 0x3) == type && (desc[i].bEndpointAddress >> 7) == dir) {
+			if ((pipe = usb_pipeAlloc(drv, dev, &desc[i])) == NULL)
+				return -1;
+			return usb_pipeAdd(drv, pipe);
+		}
+	}
+
+	return -1;
+}
 
 
 static int usb_drvcmp(usb_device_desc_t *dev, usb_interface_desc_t *iface, usb_device_id_t *filter)
@@ -76,9 +148,9 @@ static int usb_drvcmp(usb_device_desc_t *dev, usb_interface_desc_t *iface, usb_d
 }
 
 
-static usb_driver_t *usb_drvMatchIface(usb_dev_t *dev, usb_iface_t *iface)
+static usb_drv_t *usb_drvMatchIface(usb_dev_t *dev, usb_iface_t *iface)
 {
-	usb_driver_t *drv, *best = NULL;
+	usb_drv_t *drv, *best = NULL;
 	int i, match, bestmatch = 0;
 
 	mutexLock(usbdrv_common.lock);
@@ -103,31 +175,45 @@ static usb_driver_t *usb_drvMatchIface(usb_dev_t *dev, usb_iface_t *iface)
 }
 
 
-int usb_drvUnbind(usb_dev_t *dev)
+int usb_drvUnbind(usb_drv_t *drv, usb_dev_t *dev, int iface)
 {
 	msg_t msg = { 0 };
 	usb_msg_t *umsg = (usb_msg_t *)msg.i.raw;
-	int i;
+	usb_pipe_t *pipe;
+	rbnode_t *n, *nn;
+	int ret;
+
+	mutexLock(usbdrv_common.lock);
+
+	n = lib_rbMinimum(drv->pipes.root);
+	while (n != NULL) {
+		pipe = lib_treeof(usb_pipe_t, linkage, n);
+		nn = lib_rbNext(n);
+		if (pipe->dev == dev) {
+			lib_rbRemove(&drv->pipes, n);
+			dev->hcd->ops->pipeDestroy(dev->hcd, pipe);
+			free(pipe);
+		}
+		n = nn;
+	}
 
 	msg.type = mtDevCtl;
 	umsg->type = usb_msg_deletion;
 	umsg->deletion.bus = dev->hcd->num;
 	umsg->deletion.dev = dev->address;
+	umsg->deletion.interface = iface;
+	/* TODO: use non blocking version of msgSend */
+	ret = msgSend(drv->port, &msg);
 
-	for (i = 0; i < dev->nifs; i++) {
-		umsg->deletion.interface = i;
-		/* TODO: use non blocking version of msgSend */
-		if (dev->ifs[i].driver != NULL)
-			msgSend(dev->ifs[i].driver->port, &msg);
-	}
+	mutexUnlock(usbdrv_common.lock);
 
-	return 0;
+	return ret;
 }
 
 
 int usb_drvBind(usb_dev_t *dev)
 {
-	usb_driver_t *drv;
+	usb_drv_t *drv;
 	msg_t msg = { 0 };
 	usb_msg_t *umsg = (usb_msg_t *)msg.i.raw;
 	int i;
@@ -154,9 +240,9 @@ int usb_drvBind(usb_dev_t *dev)
 }
 
 
-usb_driver_t *usb_drvFind(int pid)
+usb_drv_t *usb_drvFind(int pid)
 {
-	usb_driver_t *drv = usbdrv_common.drvs, *res = NULL;
+	usb_drv_t *drv = usbdrv_common.drvs, *res = NULL;
 
 	mutexLock(usbdrv_common.lock);
 	if (drv != NULL) {
@@ -173,9 +259,10 @@ usb_driver_t *usb_drvFind(int pid)
 }
 
 
-void usb_drvAdd(usb_driver_t *drv)
+void usb_drvAdd(usb_drv_t *drv)
 {
 	mutexLock(usbdrv_common.lock);
+	idtree_init(&drv->pipes);
 	LIST_ADD(&usbdrv_common.drvs, drv);
 	mutexUnlock(usbdrv_common.lock);
 }
