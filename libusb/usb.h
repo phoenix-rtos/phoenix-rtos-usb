@@ -47,12 +47,12 @@
 
 
 /* class request codes */
-#define CLASS_REQ_GET_REPORT      1
-#define CLASS_REQ_GET_IDLE        2
-#define CLASS_REQ_GET_PROTOCOL    3
-#define CLASS_REQ_SET_REPORT      9
-#define CLASS_REQ_SET_IDLE        10
-#define CLASS_REQ_SET_PROTOCOL    11
+#define CLASS_REQ_GET_REPORT   1
+#define CLASS_REQ_GET_IDLE     2
+#define CLASS_REQ_GET_PROTOCOL 3
+#define CLASS_REQ_SET_REPORT   9
+#define CLASS_REQ_SET_IDLE     10
+#define CLASS_REQ_SET_PROTOCOL 11
 
 #define CLASS_REQ_SET_LINE_CODING        0x20
 #define CLASS_REQ_GET_LINE_CODING        0x21
@@ -100,19 +100,15 @@
 
 #define USB_TIMEOUT 5000000
 
-enum { pid_out = 0xe1,
-	pid_in = 0x69,
-	pid_setup = 0x2d };
+enum { pid_out = 0xe1, pid_in = 0x69, pid_setup = 0x2d };
 
 
-enum { out_token = 0,
-	in_token,
-	setup_token };
+enum { out_token = 0, in_token, setup_token };
 
 
-typedef struct usb_setup_packet {
-	uint8_t  bmRequestType;
-	uint8_t  bRequest;
+typedef struct {
+	uint8_t bmRequestType;
+	uint8_t bRequest;
 	uint16_t wValue;
 	uint16_t wIndex;
 	uint16_t wLength;
@@ -125,7 +121,7 @@ struct usb_desc_header {
 };
 
 
-typedef struct usb_device_desc {
+typedef struct {
 	uint8_t bLength;            /* size of descriptor */
 	uint8_t bDescriptorType;    /* descriptor type */
 	uint16_t bcdUSB;            /* usb specification in BCD */
@@ -143,7 +139,7 @@ typedef struct usb_device_desc {
 } __attribute__((packed)) usb_device_desc_t;
 
 
-typedef struct usb_configuration_desc {
+typedef struct {
 	uint8_t bLength;             /* size of descriptor */
 	uint8_t bDescriptorType;     /* descriptor type */
 	uint16_t wTotalLength;       /* total bytes returned for this configuration */
@@ -155,7 +151,7 @@ typedef struct usb_configuration_desc {
 } __attribute__((packed)) usb_configuration_desc_t;
 
 
-typedef struct usb_interface_desc {
+typedef struct {
 	uint8_t bLength;            /* size of descriptor */
 	uint8_t bDescriptorType;    /* descriptor type */
 	uint8_t bInterfaceNumber;   /* number of this interface */
@@ -168,7 +164,7 @@ typedef struct usb_interface_desc {
 } __attribute__((packed)) usb_interface_desc_t;
 
 
-typedef struct usb_interface_association_desc {
+typedef struct {
 	uint8_t bLength;
 	uint8_t bDescriptorType;
 	uint8_t bFirstInterface;
@@ -180,14 +176,14 @@ typedef struct usb_interface_association_desc {
 } __attribute__((packed)) usb_interface_association_desc_t;
 
 
-typedef struct usb_string_desc {
+typedef struct {
 	uint8_t bLength;
 	uint8_t bDescriptorType;
 	uint8_t wData[256];
 } __attribute__((packed)) usb_string_desc_t;
 
 
-typedef struct usb_endpoint_desc {
+typedef struct {
 	uint8_t bLength;          /* size of descriptor */
 	uint8_t bDescriptorType;  /* descriptor type */
 	uint8_t bEndpointAddress; /* endpoint address */
@@ -199,7 +195,7 @@ typedef struct usb_endpoint_desc {
 
 /* generic descriptor
  * used when there is no defined descriptor (e.g. HID descriptor or Report descriptor) */
-typedef struct usb_functional_desc {
+typedef struct {
 	uint8_t bFunctionLength;
 	uint8_t bDescriptorType;
 	uint8_t bDescriptorSubtype;

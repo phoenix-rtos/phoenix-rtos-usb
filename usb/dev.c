@@ -399,7 +399,8 @@ static void usb_devUnbind(usb_dev_t *dev)
 	fprintf(stderr, "usb: Device disconnected addr %d locationID: %08x\n", dev->address, dev->locationID);
 	if (dev->desc.bDeviceClass == USB_CLASS_HUB) {
 		hub_remove(dev);
-	} else {
+	}
+	else {
 		for (i = 0; i < dev->nifs; i++) {
 			if (dev->ifs[i].driver)
 				usb_drvUnbind(dev->ifs[i].driver, dev, i);

@@ -18,8 +18,8 @@
 #include <usbdriver.h>
 #include "dev.h"
 
-typedef struct usb_drv {
-	struct usb_drv *next, *prev;
+typedef struct _usb_drv {
+	struct _usb_drv *next, *prev;
 	unsigned pid;
 	unsigned port;
 	unsigned nfilters;

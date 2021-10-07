@@ -113,7 +113,7 @@ typedef struct {
 } usb_msg_t;
 
 
-typedef struct usb_modeswitch {
+typedef struct {
 	uint16_t vid;
 	uint16_t pid;
 	uint8_t msg[31];

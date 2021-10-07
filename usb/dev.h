@@ -19,22 +19,20 @@
 
 #include "usbhost.h"
 
-enum usb_speed { usb_full_speed = 0,
-	usb_low_speed,
-	usb_high_speed };
 
+enum usb_speed { usb_full_speed = 0, usb_low_speed, usb_high_speed };
 
-typedef struct usb_iface {
+typedef struct {
 	usb_interface_desc_t *desc;
 	usb_endpoint_desc_t *eps;
 	void *classDesc;
 	char *str;
 
-	struct usb_drv *driver;
+	struct _usb_drv *driver;
 } usb_iface_t;
 
 
-typedef struct usb_dev {
+typedef struct _usb_dev {
 	enum usb_speed speed;
 	usb_device_desc_t desc;
 	usb_configuration_desc_t *conf;
@@ -45,19 +43,20 @@ typedef struct usb_dev {
 
 	int address;
 	uint32_t locationID;
-	struct usb_iface *ifs;
+	usb_iface_t *ifs;
 	int nifs;
 	usb_pipe_t *ctrlPipe;
 
 	struct hcd *hcd;
-	struct usb_dev *hub;
+	struct _usb_dev *hub;
 	int port;
 
 	/* Hub fields */
-	struct usb_dev **devs;
+	struct _usb_dev **devs;
 	struct usb_transfer *statusTransfer;
+	usb_pipe_t *interruptPipe;
 	int nports;
-	struct usb_dev *prev, *next;
+	struct _usb_dev *prev, *next;
 } usb_dev_t;
 
 

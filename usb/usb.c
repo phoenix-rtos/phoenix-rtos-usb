@@ -35,6 +35,7 @@
 
 
 static struct {
+	char stack[4096] __attribute__((aligned(8)));
 	handle_t commonLock, finishedLock, drvsLock;
 	handle_t finishedCond;
 	hcd_t *hcds;
@@ -137,9 +138,9 @@ static int usb_handleUrb(msg_t *msg, unsigned int port, unsigned long rid)
 	hcd = pipe->dev->hcd;
 	if ((ret = hcd->ops->transferEnqueue(hcd, t)) != 0) {
 		free(t->msg);
-		free(t);
 		usb_free(t->buffer, t->size);
 		usb_free(t->setup, sizeof(usb_setup_packet_t));
+		free(t);
 	}
 
 	return ret;
@@ -241,12 +242,13 @@ static void usb_msgthr(void *arg)
 	unsigned long rid;
 	msg_t msg;
 	usb_msg_t *umsg;
-	int resp = 1;
+	int resp;
 	int ret;
 
 	for (;;) {
 		if (msgRecv(port, &msg, &rid) < 0)
 			continue;
+		resp = 1;
 		mutexLock(usb_common.commonLock);
 		switch (msg.type) {
 			case mtRead:
@@ -274,13 +276,14 @@ static void usb_msgthr(void *arg)
 						}
 						break;
 					default:
-						fprintf(stderr, "unsupported usb_msg type\n");
+						msg.o.io.err = -EINVAL;
+						fprintf(stderr, "usb: unsupported usb_msg type\n");
 						break;
 				}
 				break;
 			default:
-				fprintf(stderr, "usb: unsupported msg type\n");
 				msg.o.io.err = -EINVAL;
+				fprintf(stderr, "usb: unsupported msg type\n");
 		}
 		mutexUnlock(usb_common.commonLock);
 
@@ -311,9 +314,6 @@ static int usb_roothubsInit(void)
 }
 
 
-int usb_memInit(void);
-
-
 int main(int argc, char *argv[])
 {
 	oid_t oid;
@@ -334,7 +334,7 @@ int main(int argc, char *argv[])
 	}
 
 	if (usb_memInit() != 0) {
-		fprintf(stderr, "usb: Can't initiate memory managament!\n");
+		fprintf(stderr, "usb: Can't initiate memory management!\n");
 		return -EINVAL;
 	}
 
@@ -371,7 +371,10 @@ int main(int argc, char *argv[])
 		return -EINVAL;
 	}
 
-	beginthread(usb_statusthr, 4, malloc(0x1000), 0x1000, NULL);
+	if (beginthread(usb_statusthr, 4, usb_common.stack, sizeof(usb_common.stack), NULL) != 0) {
+		fprintf(stderr, "usb: Fail to init hub driver!\n");
+		return -ENOMEM;
+	}
 
 	usb_msgthr((void *)usb_common.port);
 

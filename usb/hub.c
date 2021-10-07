@@ -33,6 +33,7 @@
 #include "dev.h"
 
 struct {
+	char stack[4096] __attribute__((aligned(8)));
 	handle_t lock;
 	handle_t cond;
 	usb_dev_t *hubs;
@@ -147,9 +148,7 @@ int hub_poll(usb_dev_t *hub)
 		}
 		t->type = usb_transfer_interrupt;
 		t->direction = usb_dir_in;
-		//t->ep = hub->eps->next;
-		/* TODO: rethink hubs, maybe still consider them as drivers? */
-		t->size = hub->nports / 8 + 1;
+		t->size = (hub->nports / 8) + 1;
 		hub->statusTransfer = t;
 		hub->hcd->ops->transferEnqueue(hub->hcd, hub->statusTransfer);
 	}
@@ -187,12 +186,11 @@ int hub_portReset(usb_dev_t *hub, int port, usb_port_status_t *status)
 	if (hub_setPortFeature(hub, port, USB_PORT_FEAT_RESET) < 0)
 		return -1;
 
-	do {
+	for (retries = 5; (status->wPortChange & USB_PORT_FEAT_C_RESET) == 0 && retries > 0; --retries) {
 		usleep(100000);
 		if (hub_getPortStatus(hub, port, status) < 0)
 			return -1;
-		retries--;
-	} while ((status->wPortChange & USB_PORT_FEAT_C_RESET) == 0 && retries > 0);
+	}
 
 	if (hub_clearPortFeatures(hub, port, status->wPortChange) < 0)
 		return -1;
@@ -277,9 +275,9 @@ static void hub_statusChanged(usb_dev_t *hub, uint32_t status)
 	if (status & 1)
 		hub_hubStatusChanged(hub);
 
-	for (i = 1; i <= hub->nports; i++) {
-		if (status & (1 << i))
-			hub_portStatusChanged(hub, i);
+	for (i = 0; i < hub->nports; i++) {
+		if (status & (1 << (i + 1)))
+			hub_portStatusChanged(hub, i + 1);
 	}
 
 	/* Not a root hub */
@@ -355,6 +353,7 @@ int hub_add(usb_dev_t *hub)
 		return -EINVAL;
 	}
 
+	/* Hub descriptors might vary in size */
 	desc = (usb_hub_desc_t *)buf;
 
 	hub->nports = min(USB_HUB_MAX_PORTS, desc->bNbrPorts);
@@ -390,7 +389,11 @@ int hub_init(void)
 		return -ENOMEM;
 	}
 
-	beginthread(hub_thread, 4, malloc(0x1000), 0x1000, NULL);
+	if (beginthread(hub_thread, 4, hub_common.stack, sizeof(hub_common.stack), NULL) != 0) {
+		resourceDestroy(hub_common.lock);
+		resourceDestroy(hub_common.cond);
+		return -ENOMEM;
+	}
 
 	return 0;
 }

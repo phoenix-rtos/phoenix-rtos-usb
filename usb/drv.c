@@ -108,7 +108,7 @@ static int usb_drvcmp(usb_device_desc_t *dev, usb_interface_desc_t *iface, usb_d
 
 	if (filter->dclass != USBDRV_ANY) {
 		if ((dev->bDeviceClass != 0 && dev->bDeviceClass == filter->dclass) ||
-			(dev->bDeviceClass == 0 && iface->bInterfaceClass == filter->dclass))
+				(dev->bDeviceClass == 0 && iface->bInterfaceClass == filter->dclass))
 			match |= usbdrv_class_match;
 		else
 			return usbdrv_nomatch;
@@ -116,7 +116,7 @@ static int usb_drvcmp(usb_device_desc_t *dev, usb_interface_desc_t *iface, usb_d
 
 	if (filter->subclass != USBDRV_ANY) {
 		if ((dev->bDeviceSubClass != 0 && dev->bDeviceSubClass == filter->subclass) ||
-			(dev->bDeviceSubClass == 0 && iface->bInterfaceSubClass == filter->subclass))
+				(dev->bDeviceSubClass == 0 && iface->bInterfaceSubClass == filter->subclass))
 			match |= usbdrv_subclass_match;
 		else
 			return usbdrv_nomatch;
@@ -124,7 +124,7 @@ static int usb_drvcmp(usb_device_desc_t *dev, usb_interface_desc_t *iface, usb_d
 
 	if (filter->protocol != USBDRV_ANY) {
 		if ((dev->bDeviceProtocol != 0 && dev->bDeviceProtocol == filter->protocol) ||
-			(dev->bDeviceProtocol == 0 && iface->bInterfaceProtocol == filter->protocol))
+				(dev->bDeviceProtocol == 0 && iface->bInterfaceProtocol == filter->protocol))
 			match |= usbdrv_protocol_match;
 		else
 			return usbdrv_nomatch;
@@ -180,21 +180,18 @@ int usb_drvUnbind(usb_drv_t *drv, usb_dev_t *dev, int iface)
 	msg_t msg = { 0 };
 	usb_msg_t *umsg = (usb_msg_t *)msg.i.raw;
 	usb_pipe_t *pipe;
-	rbnode_t *n, *nn;
+	rbnode_t *n;
 	int ret;
 
 	mutexLock(usbdrv_common.lock);
 
-	n = lib_rbMinimum(drv->pipes.root);
-	while (n != NULL) {
+	while ((n = lib_rbMinimum(drv->pipes.root)) != NULL) {
 		pipe = lib_treeof(usb_pipe_t, linkage, n);
-		nn = lib_rbNext(n);
 		if (pipe->dev == dev) {
 			lib_rbRemove(&drv->pipes, n);
 			dev->hcd->ops->pipeDestroy(dev->hcd, pipe);
 			free(pipe);
 		}
-		n = nn;
 	}
 
 	msg.type = mtDevCtl;
@@ -242,9 +239,10 @@ int usb_drvBind(usb_dev_t *dev)
 
 usb_drv_t *usb_drvFind(int pid)
 {
-	usb_drv_t *drv = usbdrv_common.drvs, *res = NULL;
+	usb_drv_t *drv, *res = NULL;
 
 	mutexLock(usbdrv_common.lock);
+	drv = usbdrv_common.drvs;
 	if (drv != NULL) {
 		do {
 			if (drv->pid == pid)
@@ -276,6 +274,7 @@ int usb_drvInit(void)
 	}
 
 	if (condCreate(&usbdrv_common.cond) != 0) {
+		resourceDestroy(usbdrv_common.lock);
 		fprintf(stderr, "usbdrv: Can't create mutex!\n");
 		return -ENOMEM;
 	}

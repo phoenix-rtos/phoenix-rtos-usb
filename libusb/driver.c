@@ -250,7 +250,7 @@ void usb_dumpStringDesc(FILE *stream, usb_string_desc_t *descr)
 
 int usb_modeswitchHandle(usb_devinfo_t *dev, const usb_modeswitch_t *mode)
 {
-	char msg[31];
+	char msg[sizeof(mode->msg)];
 	int pipeCtrl, pipeIn, pipeOut;
 
 	if ((pipeCtrl = usb_open(dev, usb_transfer_control, 0)) < 0)
