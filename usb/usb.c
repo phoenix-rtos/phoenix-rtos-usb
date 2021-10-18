@@ -176,7 +176,7 @@ static int usb_handleOpen(usb_open_t *o, msg_t *msg)
 	usb_dev_t *dev;
 	usb_iface_t *iface;
 	usb_drv_t *drv;
-	int pipe;
+	usb_pipe_t *pipe;
 
 	if ((drv = usb_drvFind(msg->pid)) == NULL) {
 		fprintf(stderr, "usb: Fail to find driver pid: %d\n", msg->pid);
@@ -198,10 +198,10 @@ static int usb_handleOpen(usb_open_t *o, msg_t *msg)
 		return -EINVAL;
 	}
 
-	if ((pipe = usb_drvPipeOpen(drv, dev, iface, o->dir, o->type)) < 0)
+	if ((pipe = usb_drvPipeOpen(drv, dev, iface, o->dir, o->type)) == NULL)
 		return -EINVAL;
 
-	*(int *)msg->o.raw = pipe;
+	*(int *)msg->o.raw = pipe->linkage.id;
 
 	return 0;
 }

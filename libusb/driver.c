@@ -267,7 +267,7 @@ int usb_modeswitchHandle(usb_devinfo_t *dev, const usb_modeswitch_t *mode)
 
 	memcpy(msg, mode->msg, sizeof(msg));
 	if (usb_transferBulk(pipeOut, msg, sizeof(msg), usb_dir_out) < 0)
-		return -1;
+		return -EINVAL;
 
 	return 0;
 }

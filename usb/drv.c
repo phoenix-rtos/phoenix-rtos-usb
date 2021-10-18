@@ -35,7 +35,10 @@ struct {
 
 void usb_drvPipeFree(usb_drv_t *drv, usb_pipe_t *pipe)
 {
-	idtree_remove(&drv->pipes, &pipe->linkage);
+	if (drv != NULL)
+		idtree_remove(&drv->pipes, &pipe->linkage);
+
+	pipe->dev->hcd->ops->pipeDestroy(pipe->dev->hcd, pipe);
 	free(pipe);
 }
 
@@ -51,7 +54,7 @@ static int usb_pipeAdd(usb_drv_t *drv, usb_pipe_t *pipe)
 	if (idtree_alloc(&drv->pipes, &pipe->linkage) < 0)
 		return -1;
 
-	return pipe->linkage.id;
+	return 0;
 }
 
 
@@ -75,30 +78,34 @@ static usb_pipe_t *usb_pipeAlloc(usb_drv_t *drv, usb_dev_t *dev, usb_endpoint_de
 }
 
 
-int usb_drvPipeOpen(usb_drv_t *drv, usb_dev_t *dev, usb_iface_t *iface, int dir, int type)
+usb_pipe_t *usb_drvPipeOpen(usb_drv_t *drv, usb_dev_t *dev, usb_iface_t *iface, int dir, int type)
 {
 	usb_endpoint_desc_t *desc = iface->eps;
-	usb_pipe_t *pipe;
+	usb_pipe_t *pipe = NULL;
 	int i;
 
 	if (type == usb_transfer_control) {
 		if ((pipe = malloc(sizeof(usb_pipe_t))) == NULL)
-			return -ENOMEM;
+			return NULL;
 		memcpy(pipe, dev->ctrlPipe, sizeof(usb_pipe_t));
 		pipe->hcdpriv = NULL;
-
-		return usb_pipeAdd(drv, pipe);
 	}
-
-	for (i = 0; i < iface->desc->bNumEndpoints; i++) {
-		if ((desc[i].bmAttributes & 0x3) == type && (desc[i].bEndpointAddress >> 7) == dir) {
-			if ((pipe = usb_pipeAlloc(drv, dev, &desc[i])) == NULL)
-				return -1;
-			return usb_pipeAdd(drv, pipe);
+	else {
+		/* Search interface descriptor for this endpoint */
+		for (i = 0; i < iface->desc->bNumEndpoints; i++) {
+			if ((desc[i].bmAttributes & 0x3) == type && (desc[i].bEndpointAddress >> 7) == dir) {
+				if ((pipe = usb_pipeAlloc(drv, dev, &desc[i])) == NULL)
+					return NULL;
+			}
 		}
 	}
 
-	return -1;
+	if (pipe != NULL && drv != NULL) {
+		if (usb_pipeAdd(drv, pipe) != 0)
+			return NULL;
+	}
+
+	return pipe;
 }
 
 

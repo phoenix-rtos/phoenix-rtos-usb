@@ -29,6 +29,7 @@
 
 #include "usbhost.h"
 #include "hub.h"
+#include "drv.h"
 #include "hcd.h"
 #include "dev.h"
 
@@ -131,33 +132,44 @@ static int hub_setPortFeature(usb_dev_t *hub, int port, uint16_t wValue)
 }
 
 
-int hub_poll(usb_dev_t *hub)
+static int hub_interruptInit(usb_dev_t *hub)
 {
 	usb_transfer_t *t;
 
-	if ((t = hub->statusTransfer) == NULL) {
-		if ((t = calloc(1, sizeof(usb_transfer_t))) == NULL) {
-			fprintf(stderr, "hub: Out of memory!\n");
-			return -ENOMEM;
-		}
+	if ((t = calloc(1, sizeof(usb_transfer_t))) == NULL) {
+		fprintf(stderr, "hub: Out of memory!\n");
+		return -ENOMEM;
+	}
 
-		if ((t->buffer = usb_alloc(sizeof(uint32_t))) == NULL) {
-			free(t);
-			fprintf(stderr, "hub: Out of memory!\n");
-			return -ENOMEM;
-		}
-		t->type = usb_transfer_interrupt;
-		t->direction = usb_dir_in;
-		t->size = (hub->nports / 8) + 1;
-		hub->statusTransfer = t;
-		hub->hcd->ops->transferEnqueue(hub->hcd, hub->statusTransfer);
+	if ((t->buffer = usb_alloc(sizeof(uint32_t))) == NULL) {
+		free(t);
+		fprintf(stderr, "hub: Out of memory!\n");
+		return -ENOMEM;
 	}
-	else if (t->finished) {
-		t->finished = 0;
-		t->error = 0;
-		t->transferred = 0;
-		hub->hcd->ops->transferEnqueue(hub->hcd, hub->statusTransfer);
+
+	if ((t->pipe = usb_drvPipeOpen(NULL, hub, &hub->ifs[0], usb_dir_in, usb_transfer_interrupt)) == NULL) {
+		usb_free(t->buffer, sizeof(uint32_t));
+		free(t);
+		fprintf(stderr, "hub: Out of memory!\n");
+		return -ENOMEM;
 	}
+
+	t->type = usb_transfer_interrupt;
+	t->direction = usb_dir_in;
+	t->size = (hub->nports / 8) + 1;
+
+	hub->statusTransfer = t;
+
+	return 0;
+}
+
+
+int hub_poll(usb_dev_t *hub)
+{
+	hub->statusTransfer->finished = 0;
+	hub->statusTransfer->error = 0;
+	hub->statusTransfer->transferred = 0;
+	hub->hcd->ops->transferEnqueue(hub->hcd, hub->statusTransfer);
 
 	return 0;
 }
@@ -330,7 +342,9 @@ void hub_remove(usb_dev_t *hub)
 {
 	LIST_REMOVE(&hub_common.hubs, hub);
 	hub_common.restart = 1;
+
 	if (hub->statusTransfer != NULL) {
+		usb_drvPipeFree(NULL, hub->statusTransfer->pipe);
 		usb_free(hub->statusTransfer->buffer, sizeof(uint32_t));
 		free(hub->statusTransfer);
 	}
@@ -355,7 +369,6 @@ int hub_add(usb_dev_t *hub)
 
 	/* Hub descriptors might vary in size */
 	desc = (usb_hub_desc_t *)buf;
-
 	hub->nports = min(USB_HUB_MAX_PORTS, desc->bNbrPorts);
 	if ((hub->devs = calloc(hub->nports, sizeof(usb_dev_t *))) == NULL) {
 		fprintf(stderr, "hub: Out of memory!\n");
@@ -372,8 +385,11 @@ int hub_add(usb_dev_t *hub)
 	LIST_ADD(&hub_common.hubs, hub);
 
 	/* Not a root hub */
-	if (hub->hub != NULL)
+	if (hub->hub != NULL) {
+		if (hub_interruptInit(hub) != 0)
+			return -EINVAL;
 		return hub_poll(hub);
+	}
 	else
 		return 0;
 }

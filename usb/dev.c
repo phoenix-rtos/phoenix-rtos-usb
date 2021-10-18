@@ -148,13 +148,8 @@ void usb_devFree(usb_dev_t *dev)
 	}
 
 	free(dev->ifs);
-
-	dev->hcd->ops->pipeDestroy(dev->hcd, dev->ctrlPipe);
-	free(dev->ctrlPipe);
-
-	free(dev->statusTransfer->buffer);
-	free(dev->statusTransfer);
-
+	usb_drvPipeFree(NULL, dev->ctrlPipe);
+	free(dev->devs);
 	free(dev);
 }
 
@@ -197,10 +192,8 @@ static int usb_genLocationID(usb_dev_t *dev)
 
 static int usb_getDevDesc(usb_dev_t *dev)
 {
-	if (usb_getDescriptor(dev, USB_DESC_DEVICE, 0, (char *)&dev->desc, sizeof(usb_device_desc_t)) < 0) {
-		fprintf(stderr, "usb: Fail to get device descriptor\n");
+	if (usb_getDescriptor(dev, USB_DESC_DEVICE, 0, (char *)&dev->desc, sizeof(usb_device_desc_t)) < 0)
 		return -1;
-	}
 
 	return 0;
 }
@@ -236,7 +229,6 @@ static int usb_getConfiguration(usb_dev_t *dev)
 	ptr = (char *)conf + sizeof(usb_configuration_desc_t);
 	for (i = 0; i < dev->nifs; i++) {
 		iface = (usb_interface_desc_t *)ptr;
-		usb_dumpInferfaceDesc(stderr, iface);
 		ptr += sizeof(usb_interface_desc_t);
 		/* Class and Vendor specific descriptors */
 		/* TODO: save them to allow drivers access */
@@ -397,6 +389,11 @@ static void usb_devUnbind(usb_dev_t *dev)
 	int i;
 
 	fprintf(stderr, "usb: Device disconnected addr %d locationID: %08x\n", dev->address, dev->locationID);
+	for (i = 0; i < dev->nports; i++) {
+		if (dev->devs[i] != NULL)
+			usb_devUnbind(dev->devs[i]);
+	}
+
 	if (dev->desc.bDeviceClass == USB_CLASS_HUB) {
 		hub_remove(dev);
 	}
@@ -405,11 +402,6 @@ static void usb_devUnbind(usb_dev_t *dev)
 			if (dev->ifs[i].driver)
 				usb_drvUnbind(dev->ifs[i].driver, dev, i);
 		}
-	}
-
-	for (i = 0; i < dev->nports; i++) {
-		if (dev->devs[i] != NULL)
-			usb_devUnbind(dev->devs[i]);
 	}
 }
 
@@ -430,7 +422,7 @@ int usb_devInit(void)
 
 	if (condCreate(&usbdev_common.cond) != 0) {
 		resourceDestroy(usbdev_common.lock);
-		fprintf(stderr, "usbdev: Can't create mutex!\n");
+		fprintf(stderr, "usbdev: Can't create cond!\n");
 		return -ENOMEM;
 	}
 
