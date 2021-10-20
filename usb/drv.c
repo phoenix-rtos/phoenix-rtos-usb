@@ -190,7 +190,6 @@ int usb_drvUnbind(usb_drv_t *drv, usb_dev_t *dev, int iface)
 	usb_msg_t *umsg = (usb_msg_t *)msg.i.raw;
 	usb_pipe_t *pipe;
 	rbnode_t *n;
-	int ret;
 
 	mutexLock(usbdrv_common.lock);
 

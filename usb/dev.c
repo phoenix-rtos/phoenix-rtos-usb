@@ -38,12 +38,6 @@ struct {
 } usbdev_common;
 
 
-void usb_devCtrlFinished(usb_transfer_t *t)
-{
-	condSignal(usbdev_common.cond);
-}
-
-
 int usb_devCtrl(usb_dev_t *dev, usb_dir_t dir, usb_setup_packet_t *setup, char *buf, size_t len)
 {
 	usb_transfer_t t = (usb_transfer_t) {
@@ -53,7 +47,9 @@ int usb_devCtrl(usb_dev_t *dev, usb_dir_t dir, usb_setup_packet_t *setup, char *
 		.setup = (usb_setup_packet_t *)usbdev_common.setupBuf,
 		.buffer = usbdev_common.ctrlBuf,
 		.size = len,
+		.cond = &usbdev_common.cond
 	};
+	int ret;
 
 	if (len > USBDEV_BUF_SIZE)
 		return -1;
@@ -63,11 +59,10 @@ int usb_devCtrl(usb_dev_t *dev, usb_dir_t dir, usb_setup_packet_t *setup, char *
 	if (dir == usb_dir_out && len > 0)
 		memcpy(usbdev_common.ctrlBuf, buf, len);
 
-	if (dev->hcd->ops->transferEnqueue(dev->hcd, &t) != 0)
-		return -1;
-
-	while (!t.finished)
-		condWait(usbdev_common.cond, usbdev_common.lock, 0);
+	if ((ret = usb_transferSubmit(&t, 1)) != 0) {
+		mutexUnlock(usbdev_common.lock);
+		return ret;
+	}
 
 	if (t.error == 0 && dir == usb_dir_in && len > 0)
 		memcpy(buf, usbdev_common.ctrlBuf, len);

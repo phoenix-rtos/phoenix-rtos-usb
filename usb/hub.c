@@ -42,12 +42,6 @@ struct {
 } hub_common;
 
 
-void hub_interrupt(void)
-{
-	condSignal(hub_common.cond);
-}
-
-
 static int hub_getDesc(usb_dev_t *hub, char *buf, size_t len)
 {
 	usb_setup_packet_t setup = (usb_setup_packet_t) {
@@ -157,6 +151,7 @@ static int hub_interruptInit(usb_dev_t *hub)
 	t->type = usb_transfer_interrupt;
 	t->direction = usb_dir_in;
 	t->size = (hub->nports / 8) + 1;
+	t->cond = &hub_common.cond;
 
 	hub->statusTransfer = t;
 
@@ -169,9 +164,8 @@ int hub_poll(usb_dev_t *hub)
 	hub->statusTransfer->finished = 0;
 	hub->statusTransfer->error = 0;
 	hub->statusTransfer->transferred = 0;
-	hub->hcd->ops->transferEnqueue(hub->hcd, hub->statusTransfer);
 
-	return 0;
+	return usb_transferSubmit(hub->statusTransfer, 0);
 }
 
 
@@ -194,7 +188,7 @@ int hub_portReset(usb_dev_t *hub, int port, usb_port_status_t *status)
 {
 	int retries;
 
-	memset(status, 0, sizoef(*status));
+	memset(status, 0, sizeof(*status));
 	if (hub_setPortFeature(hub, port, USB_PORT_FEAT_RESET) < 0)
 		return -1;
 
@@ -305,7 +299,7 @@ static uint32_t hub_getStatus(usb_dev_t *hub)
 	if (hub->hub == NULL) {
 		status = hub->hcd->ops->getRoothubStatus(hub);
 	}
-	else if (hub->statusTransfer->finished) {
+	else if (usb_transferCheck(hub->statusTransfer)) {
 		if (hub->statusTransfer->error == 0 && hub->statusTransfer->transferred > 0)
 			memcpy(&status, hub->statusTransfer->buffer, sizeof(status));
 		else

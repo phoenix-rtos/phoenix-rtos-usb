@@ -36,7 +36,7 @@
 
 static struct {
 	char stack[4096] __attribute__((aligned(8)));
-	handle_t commonLock, finishedLock, drvsLock;
+	handle_t lock;
 	handle_t finishedCond;
 	hcd_t *hcds;
 	usb_drv_t *drvs;
@@ -46,24 +46,57 @@ static struct {
 } usb_common;
 
 
-static void usb_handleUrbTransfer(usb_transfer_t *t)
+int usb_transferCheck(usb_transfer_t *t)
 {
-	mutexLock(usb_common.finishedLock);
-	LIST_ADD(&usb_common.finished, t);
-	condSignal(usb_common.finishedCond);
-	mutexUnlock(usb_common.finishedLock);
+	int val;
+
+	mutexLock(usb_common.lock);
+	val = t->finished;
+	mutexUnlock(usb_common.lock);
+
+	return val;
+}
+
+
+int usb_transferSubmit(usb_transfer_t *t, int sync)
+{
+	hcd_t *hcd = t->pipe->dev->hcd;
+	int ret = 0;
+
+	if ((ret = hcd->ops->transferEnqueue(hcd, t)) != 0)
+		return ret;
+
+	if (sync) {
+		mutexLock(usb_common.lock);
+		while (!t->finished)
+			condWait(*t->cond, usb_common.lock, 0);
+		mutexUnlock(usb_common.lock);
+	}
+
+	return ret;
 }
 
 
 /* Called by the hcd driver */
-void usb_transferFinished(usb_transfer_t *t)
+void usb_transferFinished(usb_transfer_t *t, int status)
 {
+	mutexLock(usb_common.lock);
+	t->finished = 1;
+
+	if (status >= 0) {
+		t->transferred = status;
+		t->error = 0;
+	}
+	else {
+		t->transferred = 0;
+		t->error = -status;
+	}
+
+	/* URB Transfer */
 	if (t->msg != NULL)
-		usb_handleUrbTransfer(t);
-	else if (t->type == usb_transfer_interrupt)
-		hub_interrupt();
-	else
-		usb_devCtrlFinished(t);
+		LIST_ADD(&usb_common.finished, t);
+	condSignal(*t->cond);
+	mutexUnlock(usb_common.lock);
 }
 
 
@@ -85,7 +118,6 @@ static usb_iface_t *usb_ifaceFind(usb_dev_t *dev, int num)
 static int usb_handleUrb(msg_t *msg, unsigned int port, unsigned long rid)
 {
 	usb_msg_t *umsg = (usb_msg_t *)msg->i.raw;
-	hcd_t *hcd;
 	usb_pipe_t *pipe;
 	usb_drv_t *drv;
 	usb_transfer_t *t;
@@ -109,6 +141,7 @@ static int usb_handleUrb(msg_t *msg, unsigned int port, unsigned long rid)
 	t->pipe = pipe;
 	t->transferred = 0;
 	t->size = umsg->urb.size;
+	t->cond = &usb_common.finishedCond;
 
 	if ((t->msg = malloc(sizeof(msg_t))) == NULL) {
 		free(t);
@@ -135,8 +168,7 @@ static int usb_handleUrb(msg_t *msg, unsigned int port, unsigned long rid)
 	t->port = port;
 	t->rid = rid;
 
-	hcd = pipe->dev->hcd;
-	if ((ret = hcd->ops->transferEnqueue(hcd, t)) != 0) {
+	if ((ret = usb_transferSubmit(t, 0)) != 0) {
 		free(t->msg);
 		usb_free(t->buffer, t->size);
 		usb_free(t->setup, sizeof(usb_setup_packet_t));
@@ -212,12 +244,12 @@ static void usb_statusthr(void *arg)
 	usb_transfer_t *t;
 
 	for (;;) {
-		mutexLock(usb_common.finishedLock);
+		mutexLock(usb_common.lock);
 		while (usb_common.finished == NULL)
-			condWait(usb_common.finishedCond, usb_common.finishedLock, 0);
+			condWait(usb_common.finishedCond, usb_common.lock, 0);
 		t = usb_common.finished;
 		LIST_REMOVE(&usb_common.finished, t);
-		mutexUnlock(usb_common.finishedLock);
+		mutexUnlock(usb_common.lock);
 
 		if (t->type == usb_transfer_bulk || t->type == usb_transfer_control) {
 			t->msg->o.io.err = (t->error != 0) ? -t->error : t->transferred;
@@ -249,7 +281,7 @@ static void usb_msgthr(void *arg)
 		if (msgRecv(port, &msg, &rid) < 0)
 			continue;
 		resp = 1;
-		mutexLock(usb_common.commonLock);
+		mutexLock(usb_common.lock);
 		switch (msg.type) {
 			case mtRead:
 				msg.o.io.err = usb_devsList(msg.o.data, msg.o.size);
@@ -280,7 +312,7 @@ static void usb_msgthr(void *arg)
 				msg.o.io.err = -EINVAL;
 				fprintf(stderr, "usb: unsupported msg type\n");
 		}
-		mutexUnlock(usb_common.commonLock);
+		mutexUnlock(usb_common.lock);
 
 		if (resp)
 			msgRespond(port, &msg, rid);
@@ -313,12 +345,7 @@ int main(int argc, char *argv[])
 {
 	oid_t oid;
 
-	if (mutexCreate(&usb_common.commonLock) != 0) {
-		fprintf(stderr, "usb: Can't create mutex!\n");
-		return -EINVAL;
-	}
-
-	if (mutexCreate(&usb_common.finishedLock) != 0) {
+	if (mutexCreate(&usb_common.lock) != 0) {
 		fprintf(stderr, "usb: Can't create mutex!\n");
 		return -EINVAL;
 	}
