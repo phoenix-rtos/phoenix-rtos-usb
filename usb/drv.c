@@ -101,8 +101,10 @@ usb_pipe_t *usb_drvPipeOpen(usb_drv_t *drv, usb_dev_t *dev, usb_iface_t *iface, 
 	}
 
 	if (pipe != NULL && drv != NULL) {
-		if (usb_pipeAdd(drv, pipe) != 0)
+		if (usb_pipeAdd(drv, pipe) != 0) {
+			free(pipe);
 			return NULL;
+		}
 	}
 
 	return pipe;
@@ -201,17 +203,15 @@ int usb_drvUnbind(usb_drv_t *drv, usb_dev_t *dev, int iface)
 		}
 	}
 
+	mutexUnlock(usbdrv_common.lock);
+
 	msg.type = mtDevCtl;
 	umsg->type = usb_msg_deletion;
 	umsg->deletion.bus = dev->hcd->num;
 	umsg->deletion.dev = dev->address;
 	umsg->deletion.interface = iface;
 	/* TODO: use non blocking version of msgSend */
-	ret = msgSend(drv->port, &msg);
-
-	mutexUnlock(usbdrv_common.lock);
-
-	return ret;
+	return msgSend(drv->port, &msg);
 }
 
 
@@ -252,8 +252,10 @@ usb_drv_t *usb_drvFind(int pid)
 	drv = usbdrv_common.drvs;
 	if (drv != NULL) {
 		do {
-			if (drv->pid == pid)
+			if (drv->pid == pid) {
 				res = drv;
+				break;
+			}
 
 			drv = drv->next;
 		} while (drv != usbdrv_common.drvs);

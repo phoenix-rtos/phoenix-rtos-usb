@@ -192,9 +192,9 @@ int hub_clearPortFeatures(usb_dev_t *hub, int port, uint32_t change)
 
 int hub_portReset(usb_dev_t *hub, int port, usb_port_status_t *status)
 {
-	int retries = 5;
+	int retries;
 
-	usleep(100000);
+	memset(status, 0, sizoef(*status));
 	if (hub_setPortFeature(hub, port, USB_PORT_FEAT_RESET) < 0)
 		return -1;
 
@@ -207,7 +207,7 @@ int hub_portReset(usb_dev_t *hub, int port, usb_port_status_t *status)
 	if (hub_clearPortFeatures(hub, port, status->wPortChange) < 0)
 		return -1;
 
-	return 0;
+	return (retries > 0) ? 0 : -1;
 }
 
 
@@ -390,8 +390,8 @@ int hub_add(usb_dev_t *hub)
 			return -EINVAL;
 		return hub_poll(hub);
 	}
-	else
-		return 0;
+
+	return 0;
 }
 
 

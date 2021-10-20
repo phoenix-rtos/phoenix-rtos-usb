@@ -219,12 +219,15 @@ static int usb_getConfiguration(usb_dev_t *dev)
 	/* TODO: Handle multiple configuration devices */
 	if (usb_getDescriptor(dev, USB_DESC_CONFIG, 0, (char *)conf, pre.wTotalLength) < 0) {
 		fprintf(stderr, "usb: Fail to get configuration descriptor\n");
+		free(conf);
 		return -1;
 	}
 
 	dev->nifs = conf->bNumInterfaces;
-	if ((dev->ifs = calloc(dev->nifs, sizeof(usb_iface_t))) == NULL)
+	if ((dev->ifs = calloc(dev->nifs, sizeof(usb_iface_t))) == NULL) {
+		free(conf);
 		return -ENOMEM;
+	}
 
 	ptr = (char *)conf + sizeof(usb_configuration_desc_t);
 	for (i = 0; i < dev->nifs; i++) {
@@ -427,6 +430,8 @@ int usb_devInit(void)
 	}
 
 	if ((usbdev_common.setupBuf = usb_alloc(USBDEV_BUF_SIZE)) == NULL) {
+		resourceDestroy(usbdev_common.lock);
+		resourceDestroy(usbdev_common.cond);
 		fprintf(stderr, "usbdev: Fail to allocate buffer!\n");
 		return -ENOMEM;
 	}

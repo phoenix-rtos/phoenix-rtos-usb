@@ -33,7 +33,7 @@ int usb_connect(const usb_device_id_t *filters, int nfilters, unsigned drvport)
 		usleep(1000000);
 
 	msg.type = mtDevCtl;
-	msg.i.size = sizeof(usb_device_id_t) * nfilters;
+	msg.i.size = sizeof(*filters) * nfilters;
 	msg.i.data = (void *)filters;
 
 	umsg->type = usb_msg_connect;
@@ -52,9 +52,13 @@ int usb_connect(const usb_device_id_t *filters, int nfilters, unsigned drvport)
 int usb_eventsWait(int port, msg_t *msg)
 {
 	unsigned long rid;
+	int err;
 
-	if (msgRecv(port, msg, &rid) < 0)
-		return -1;
+	do {
+		err = msgRecv(port, msg, &rid);
+		if (err < 0 && err != -EINTR)
+			return -1;
+	} while (err == -EINTR);
 
 	if (msgRespond(port, msg, rid) < 0)
 		return -1;

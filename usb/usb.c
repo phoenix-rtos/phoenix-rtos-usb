@@ -259,21 +259,16 @@ static void usb_msgthr(void *arg)
 				switch (umsg->type) {
 					case usb_msg_connect:
 						msg.o.io.err = usb_handleConnect(&msg, &umsg->connect);
-						resp = 1;
 						break;
 					case usb_msg_open:
 						if (usb_handleOpen(&umsg->open, &msg) != 0)
 							msg.o.io.err = -1;
-						resp = 1;
 						break;
 					case usb_msg_urb:
-						if ((ret = usb_handleUrb(&msg, port, rid)) != 0) {
+						if ((ret = usb_handleUrb(&msg, port, rid)) != 0)
 							msg.o.io.err = ret;
-							resp = 1;
-						}
-						else {
+						else
 							resp = 0;
-						}
 						break;
 					default:
 						msg.o.io.err = -EINVAL;
