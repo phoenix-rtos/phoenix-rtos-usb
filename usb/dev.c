@@ -149,7 +149,7 @@ void usb_devFree(usb_dev_t *dev)
 }
 
 
-static void usb_devDestroy(usb_dev_t *dev)
+void usb_devDestroy(usb_dev_t *dev)
 {
 	int i;
 
@@ -163,6 +163,7 @@ static void usb_devDestroy(usb_dev_t *dev)
 
 	usb_devFree(dev);
 }
+
 
 static int usb_genLocationID(usb_dev_t *dev)
 {
@@ -323,13 +324,11 @@ int usb_devEnumerate(usb_dev_t *dev)
 
 	if (usb_genLocationID(dev) < 0) {
 		fprintf(stderr, "usb: Fail to generate location ID\n");
-		usb_devFree(dev);
 		return -1;
 	}
 
 	if (usb_getDevDesc(dev) < 0) {
 		fprintf(stderr, "usb: Fail to get device descriptor\n");
-		usb_devDestroy(dev);
 		return -1;
 	}
 
@@ -338,32 +337,27 @@ int usb_devEnumerate(usb_dev_t *dev)
 
 	if ((addr = hcd_addrAlloc(dev->hcd)) < 0) {
 		fprintf(stderr, "usb: Fail to add device to hcd\n");
-		usb_devDestroy(dev);
 		return -1;
 	}
 
 	if (usb_setAddress(dev, addr) < 0) {
 		fprintf(stderr, "usb: Fail to set device address\n");
-		usb_devDestroy(dev);
 		return -1;
 	}
 	fprintf(stderr, "usb: New device addr: %d locationID: %08x\n", dev->address, dev->locationID);
 
 	if (usb_getDevDesc(dev) < 0) {
 		fprintf(stderr, "usb: Fail to get device descriptor\n");
-		usb_devDestroy(dev);
 		return -1;
 	}
 
 	if (usb_getConfiguration(dev) < 0) {
 		fprintf(stderr, "usb: Fail to get configuration descriptor\n");
-		usb_devDestroy(dev);
 		return -1;
 	}
 
 	if (usb_getAllStringDescs(dev) < 0) {
 		fprintf(stderr, "usb: Fail to get string descriptors\n");
-		usb_devDestroy(dev);
 		return -1;
 	}
 
@@ -374,7 +368,6 @@ int usb_devEnumerate(usb_dev_t *dev)
 	else if (usb_drvBind(dev) != 0) {
 		fprintf(stderr, "usb: Fail to match drivers for device\n");
 		/* TODO: make device orphaned */
-		usb_devDestroy(dev);
 		return -1;
 	}
 

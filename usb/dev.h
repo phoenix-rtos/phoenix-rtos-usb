@@ -71,6 +71,9 @@ usb_dev_t *usb_devAlloc(void);
 void usb_devFree(usb_dev_t *dev);
 
 
+void usb_devDestroy(usb_dev_t *dev);
+
+
 int usb_devEnumerate(usb_dev_t *dev);
 
 
@@ -78,5 +81,6 @@ void usb_devDisconnected(usb_dev_t *dev);
 
 
 int usb_devInit(void);
+
 
 #endif /* _USB_DEV_H_ */
