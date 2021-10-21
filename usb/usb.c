@@ -36,7 +36,7 @@
 
 static struct {
 	char stack[4096] __attribute__((aligned(8)));
-	handle_t lock;
+	handle_t lock, transferLock;
 	handle_t finishedCond;
 	hcd_t *hcds;
 	usb_drv_t *drvs;
@@ -50,9 +50,9 @@ int usb_transferCheck(usb_transfer_t *t)
 {
 	int val;
 
-	mutexLock(usb_common.lock);
+	mutexLock(usb_common.transferLock);
 	val = t->finished;
-	mutexUnlock(usb_common.lock);
+	mutexUnlock(usb_common.transferLock);
 
 	return val;
 }
@@ -67,10 +67,10 @@ int usb_transferSubmit(usb_transfer_t *t, int sync)
 		return ret;
 
 	if (sync) {
-		mutexLock(usb_common.lock);
+		mutexLock(usb_common.transferLock);
 		while (!t->finished)
-			condWait(*t->cond, usb_common.lock, 0);
-		mutexUnlock(usb_common.lock);
+			condWait(*t->cond, usb_common.transferLock, 0);
+		mutexUnlock(usb_common.transferLock);
 	}
 
 	return ret;
@@ -80,7 +80,7 @@ int usb_transferSubmit(usb_transfer_t *t, int sync)
 /* Called by the hcd driver */
 void usb_transferFinished(usb_transfer_t *t, int status)
 {
-	mutexLock(usb_common.lock);
+	mutexLock(usb_common.transferLock);
 	t->finished = 1;
 
 	if (status >= 0) {
@@ -96,7 +96,7 @@ void usb_transferFinished(usb_transfer_t *t, int status)
 	if (t->msg != NULL)
 		LIST_ADD(&usb_common.finished, t);
 	condSignal(*t->cond);
-	mutexUnlock(usb_common.lock);
+	mutexUnlock(usb_common.transferLock);
 }
 
 
@@ -244,12 +244,12 @@ static void usb_statusthr(void *arg)
 	usb_transfer_t *t;
 
 	for (;;) {
-		mutexLock(usb_common.lock);
+		mutexLock(usb_common.transferLock);
 		while (usb_common.finished == NULL)
-			condWait(usb_common.finishedCond, usb_common.lock, 0);
+			condWait(usb_common.finishedCond, usb_common.transferLock, 0);
 		t = usb_common.finished;
 		LIST_REMOVE(&usb_common.finished, t);
-		mutexUnlock(usb_common.lock);
+		mutexUnlock(usb_common.transferLock);
 
 		if (t->type == usb_transfer_bulk || t->type == usb_transfer_control) {
 			t->msg->o.io.err = (t->error != 0) ? -t->error : t->transferred;
@@ -346,6 +346,11 @@ int main(int argc, char *argv[])
 	oid_t oid;
 
 	if (mutexCreate(&usb_common.lock) != 0) {
+		fprintf(stderr, "usb: Can't create mutex!\n");
+		return -EINVAL;
+	}
+
+	if (mutexCreate(&usb_common.transferLock) != 0) {
 		fprintf(stderr, "usb: Can't create mutex!\n");
 		return -EINVAL;
 	}
