@@ -143,7 +143,7 @@ static int hub_interruptInit(usb_dev_t *hub)
 		return -ENOMEM;
 	}
 
-	if ((t->pipe = usb_drvPipeOpen(NULL, hub, &hub->ifs[0], usb_dir_in, usb_transfer_interrupt)) == NULL) {
+	if ((t->pipe = usb_pipeOpen(hub, 0, usb_dir_in, usb_transfer_interrupt)) == NULL) {
 		usb_free(t->buffer, sizeof(uint32_t));
 		free(t);
 		fprintf(stderr, "hub: Out of memory!\n");
@@ -219,16 +219,14 @@ static void hub_devConnected(usb_dev_t *hub, int port)
 		return;
 	}
 
-	hub->devs[port - 1] = dev;
 	dev->hub = hub;
 	dev->hcd = hub->hcd;
 	dev->port = port;
 
 	do {
-		if (hub_portReset(hub, port, &status) < 0) {
+		if ((ret = hub_portReset(hub, port, &status)) < 0) {
 			fprintf(stderr, "hub: fail to reset port %d\n", port);
-			usb_devFree(dev);
-			return;
+			break;
 		}
 
 		if (status.wPortStatus & USB_PORT_STAT_HIGH_SPEED)
@@ -249,8 +247,7 @@ static void hub_devConnected(usb_dev_t *hub, int port)
 	} while (ret != 0 && retries > 0);
 
 	if (ret != 0) {
-		usb_devDestroy(dev);
-		hub->devs[port - 1] = NULL;
+		usb_devDisconnected(dev);
 	}
 }
 
@@ -278,7 +275,6 @@ static void hub_portStatusChanged(usb_dev_t *hub, int port)
 		}
 		else if (hub->devs[port - 1] != NULL) {
 			usb_devDisconnected(hub->devs[port - 1]);
-			hub->devs[port - 1] = NULL;
 		}
 	}
 

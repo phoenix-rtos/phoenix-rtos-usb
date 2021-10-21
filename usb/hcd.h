@@ -60,7 +60,7 @@ int hcd_addrAlloc(hcd_t *hcd);
 
 void hcd_addrFree(hcd_t *hcd, int addr);
 
-usb_dev_t *hcd_devFind(hcd_t *hcdList, uint32_t locationID);
+hcd_t *hcd_find(hcd_t *hcdList, uint32_t locationID);
 
 hcd_t *hcd_init(void);
 

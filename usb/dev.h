@@ -59,19 +59,13 @@ typedef struct _usb_dev {
 } usb_dev_t;
 
 
+usb_dev_t *usb_devFind(usb_dev_t *hub, int locationID);
+
+
 int usb_devCtrl(usb_dev_t *dev, usb_dir_t dir, usb_setup_packet_t *setup, char *buf, size_t len);
 
 
-void usb_devCtrlFinished(usb_transfer_t *t);
-
-
 usb_dev_t *usb_devAlloc(void);
-
-
-void usb_devFree(usb_dev_t *dev);
-
-
-void usb_devDestroy(usb_dev_t *dev);
 
 
 int usb_devEnumerate(usb_dev_t *dev);
@@ -81,6 +75,9 @@ void usb_devDisconnected(usb_dev_t *dev);
 
 
 int usb_devInit(void);
+
+
+void usb_devSetChild(usb_dev_t *parent, int port, usb_dev_t *child);
 
 
 #endif /* _USB_DEV_H_ */

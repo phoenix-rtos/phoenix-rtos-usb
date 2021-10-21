@@ -125,11 +125,9 @@ static hcd_t *hcd_create(const hcd_ops_t *ops, const hcd_info_t *info, int num)
 }
 
 
-usb_dev_t *hcd_devFind(hcd_t *hcdList, uint32_t locationID)
+hcd_t *hcd_find(hcd_t *hcdList, uint32_t locationID)
 {
-	usb_dev_t *d;
 	hcd_t *hcd = hcdList;
-	int port;
 
 	do {
 		if ((locationID & 0xf) == hcd->num)
@@ -138,18 +136,8 @@ usb_dev_t *hcd_devFind(hcd_t *hcdList, uint32_t locationID)
 
 	if ((locationID & 0xf) != hcd->num)
 		return NULL;
-	locationID >>= 4;
 
-	d = hcd->roothub;
-	while (locationID != 0) {
-		port = locationID & 0xf;
-		if (port > d->nports || d->devs[port - 1] == NULL)
-			return NULL;
-		d = d->devs[port - 1];
-		locationID >>= 4;
-	}
-
-	return d;
+	return hcd;
 }
 
 

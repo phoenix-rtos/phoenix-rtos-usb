@@ -28,24 +28,29 @@
 
 struct {
 	handle_t lock;
-	handle_t cond;
 	usb_drv_t *drvs;
 } usbdrv_common;
 
 
 void usb_drvPipeFree(usb_drv_t *drv, usb_pipe_t *pipe)
 {
+	mutexLock(usbdrv_common.lock);
 	if (drv != NULL)
 		idtree_remove(&drv->pipes, &pipe->linkage);
 
 	pipe->dev->hcd->ops->pipeDestroy(pipe->dev->hcd, pipe);
 	free(pipe);
+	mutexUnlock(usbdrv_common.lock);
 }
 
 
-usb_pipe_t *usb_drvPipeFind(usb_drv_t *drv, int pipe)
+static usb_pipe_t *usb_drvPipeFind(usb_drv_t *drv, int pipe)
 {
-	return lib_treeof(usb_pipe_t, linkage, idtree_find(&drv->pipes, pipe));
+	usb_pipe_t *res;
+
+	res = lib_treeof(usb_pipe_t, linkage, idtree_find(&drv->pipes, pipe));
+
+	return res;
 }
 
 
@@ -78,12 +83,31 @@ static usb_pipe_t *usb_pipeAlloc(usb_drv_t *drv, usb_dev_t *dev, usb_endpoint_de
 }
 
 
-usb_pipe_t *usb_drvPipeOpen(usb_drv_t *drv, usb_dev_t *dev, usb_iface_t *iface, int dir, int type)
+static usb_pipe_t *_usb_drvPipeOpen(usb_drv_t *drv, hcd_t *hcd, int locationID, int ifaceID, int dir, int type)
 {
-	usb_endpoint_desc_t *desc = iface->eps;
+	usb_endpoint_desc_t *desc;
 	usb_pipe_t *pipe = NULL;
+	usb_dev_t *dev;
+	usb_iface_t *iface;
 	int i;
 
+	if ((dev = usb_devFind(hcd->roothub, locationID)) == NULL) {
+		fprintf(stderr, "usb: Fail to find device\n");
+		return NULL;
+	}
+
+	if (dev->nifs < ifaceID) {
+		fprintf(stderr, "usb: Fail to find iface\n");
+		return NULL;
+	}
+
+	iface = &dev->ifs[ifaceID];
+
+	/* Driver and interface mismatch */
+	if (iface->driver != drv)
+		return NULL;
+
+	desc = iface->eps;
 	if (type == usb_transfer_control) {
 		if ((pipe = malloc(sizeof(usb_pipe_t))) == NULL)
 			return NULL;
@@ -108,6 +132,50 @@ usb_pipe_t *usb_drvPipeOpen(usb_drv_t *drv, usb_dev_t *dev, usb_iface_t *iface, 
 	}
 
 	return pipe;
+}
+
+
+usb_pipe_t *usb_pipeOpen(usb_dev_t *dev, int iface, int dir, int type)
+{
+	usb_pipe_t *pipe = NULL;
+
+	mutexLock(usbdrv_common.lock);
+	pipe = _usb_drvPipeOpen(NULL, dev->hcd, dev->locationID, iface, dir, type);
+	mutexUnlock(usbdrv_common.lock);
+
+	return pipe;
+}
+
+
+int usb_drvPipeOpen(usb_drv_t *drv, hcd_t *hcd, int locationID, int iface, int dir, int type)
+{
+	usb_pipe_t *pipe = NULL;
+	int pipeId = -1;
+
+	mutexLock(usbdrv_common.lock);
+	if ((pipe = _usb_drvPipeOpen(drv, hcd, locationID, iface, dir, type)) != NULL)
+		pipeId = pipe->linkage.id;
+	mutexUnlock(usbdrv_common.lock);
+
+	return pipeId;
+}
+
+
+int usb_drvTransfer(usb_drv_t *drv, usb_transfer_t *t, int pipeId)
+{
+	usb_pipe_t *pipe;
+	int ret = -1;
+
+	mutexLock(usbdrv_common.lock);
+	pipe = usb_drvPipeFind(drv, pipeId);
+	if (pipe != NULL) {
+		t->pipe = pipe;
+		t->type = pipe->type;
+		ret = usb_transferSubmit(t, 0);
+	}
+	mutexUnlock(usbdrv_common.lock);
+
+	return ret;
 }
 
 
@@ -192,7 +260,6 @@ int usb_drvUnbind(usb_drv_t *drv, usb_dev_t *dev, int iface)
 	rbnode_t *n;
 
 	mutexLock(usbdrv_common.lock);
-
 	while ((n = lib_rbMinimum(drv->pipes.root)) != NULL) {
 		pipe = lib_treeof(usb_pipe_t, linkage, n);
 		if (pipe->dev == dev) {
@@ -203,12 +270,12 @@ int usb_drvUnbind(usb_drv_t *drv, usb_dev_t *dev, int iface)
 	}
 
 	mutexUnlock(usbdrv_common.lock);
-
 	msg.type = mtDevCtl;
 	umsg->type = usb_msg_deletion;
 	umsg->deletion.bus = dev->hcd->num;
 	umsg->deletion.dev = dev->address;
 	umsg->deletion.interface = iface;
+
 	/* TODO: use non blocking version of msgSend */
 	return msgSend(drv->port, &msg);
 }
@@ -277,12 +344,6 @@ void usb_drvAdd(usb_drv_t *drv)
 int usb_drvInit(void)
 {
 	if (mutexCreate(&usbdrv_common.lock) != 0) {
-		fprintf(stderr, "usbdrv: Can't create mutex!\n");
-		return -ENOMEM;
-	}
-
-	if (condCreate(&usbdrv_common.cond) != 0) {
-		resourceDestroy(usbdrv_common.lock);
 		fprintf(stderr, "usbdrv: Can't create mutex!\n");
 		return -ENOMEM;
 	}

@@ -54,7 +54,6 @@ int usb_devCtrl(usb_dev_t *dev, usb_dir_t dir, usb_setup_packet_t *setup, char *
 	if (len > USBDEV_BUF_SIZE)
 		return -1;
 
-	mutexLock(usbdev_common.lock);
 	memcpy(usbdev_common.setupBuf, setup, sizeof(usb_setup_packet_t));
 	if (dir == usb_dir_out && len > 0)
 		memcpy(usbdev_common.ctrlBuf, buf, len);
@@ -66,7 +65,6 @@ int usb_devCtrl(usb_dev_t *dev, usb_dir_t dir, usb_setup_packet_t *setup, char *
 
 	if (t.error == 0 && dir == usb_dir_in && len > 0)
 		memcpy(buf, usbdev_common.ctrlBuf, len);
-	mutexUnlock(usbdev_common.lock);
 
 	return (t.error == 0) ? t.transferred : -t.error;
 }
@@ -361,6 +359,7 @@ int usb_devEnumerate(usb_dev_t *dev)
 		return -1;
 	}
 
+	usb_devSetChild(dev->hub, dev->port, dev);
 	if (dev->desc.bDeviceClass == USB_CLASS_HUB) {
 		if (hub_add(dev) != 0)
 			return -1;
@@ -368,7 +367,6 @@ int usb_devEnumerate(usb_dev_t *dev)
 	else if (usb_drvBind(dev) != 0) {
 		fprintf(stderr, "usb: Fail to match drivers for device\n");
 		/* TODO: make device orphaned */
-		return -1;
 	}
 
 	return 0;
@@ -397,11 +395,43 @@ static void usb_devUnbind(usb_dev_t *dev)
 }
 
 
+void usb_devSetChild(usb_dev_t *parent, int port, usb_dev_t *child)
+{
+	mutexLock(usbdev_common.lock);
+	parent->devs[port - 1] = child;
+	mutexUnlock(usbdev_common.lock);
+}
+
+
+usb_dev_t *usb_devFind(usb_dev_t *hub, int locationID)
+{
+	usb_dev_t *dev = hub;
+	int port;
+
+	mutexLock(usbdev_common.lock);
+	locationID >>= 4;
+	while (locationID != 0) {
+		port = locationID & 0xf;
+		if (port > dev->nports || dev->devs[port - 1] == NULL) {
+			dev = NULL;
+			break;
+		}
+		dev = dev->devs[port - 1];
+		locationID >>= 4;
+	}
+	mutexUnlock(usbdev_common.lock);
+
+	return dev;
+}
+
+
 void usb_devDisconnected(usb_dev_t *dev)
 {
+	usb_devSetChild(dev->hub, dev->port, NULL);
 	usb_devUnbind(dev);
 	usb_devDestroy(dev);
 }
+
 
 
 int usb_devInit(void)

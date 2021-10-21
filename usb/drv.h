@@ -17,6 +17,7 @@
 
 #include <usbdriver.h>
 #include "dev.h"
+#include "hcd.h"
 
 typedef struct _usb_drv {
 	struct _usb_drv *next, *prev;
@@ -43,13 +44,17 @@ int usb_drvUnbind(usb_drv_t *drv, usb_dev_t *dev, int iface);
 int usb_drvInit(void);
 
 
-usb_pipe_t *usb_drvPipeOpen(usb_drv_t *drv, usb_dev_t *dev, usb_iface_t *iface, int dir, int type);
+int usb_drvPipeOpen(usb_drv_t *drv, hcd_t *hcd, int locationID, int iface, int dir, int type);
+
+
+usb_pipe_t *usb_pipeOpen(usb_dev_t *dev, int iface, int dir, int type);
 
 
 void usb_drvPipeFree(usb_drv_t *drv, usb_pipe_t *pipe);
 
 
-usb_pipe_t *usb_drvPipeFind(usb_drv_t *drv, int pipe);
+int usb_drvTransfer(usb_drv_t *drv, usb_transfer_t *t, int pipeId);
+
 
 
 #endif /* _USB_DRV_H_ */

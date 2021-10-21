@@ -106,39 +106,21 @@ static int usb_devsList(char *buffer, size_t size)
 }
 
 
-static usb_iface_t *usb_ifaceFind(usb_dev_t *dev, int num)
-{
-	if (num >= dev->nifs)
-		return NULL;
-
-	return &dev->ifs[num];
-}
-
-
 static int usb_handleUrb(msg_t *msg, unsigned int port, unsigned long rid)
 {
 	usb_msg_t *umsg = (usb_msg_t *)msg->i.raw;
-	usb_pipe_t *pipe;
 	usb_drv_t *drv;
 	usb_transfer_t *t;
-	int ret = 0;
 
 	if ((drv = usb_drvFind(msg->pid)) == NULL) {
 		fprintf(stderr, "usb: driver pid %d does not exist!\n", drv->pid);
 		return -EINVAL;
 	}
 
-	if ((pipe = usb_drvPipeFind(drv, umsg->urb.pipe)) == NULL) {
-		fprintf(stderr, "usb: Fail to find pipe: %d\n", umsg->urb.pipe);
-		return -EINVAL;
-	}
-
 	if ((t = calloc(1, sizeof(usb_transfer_t))) == NULL)
 		return -ENOMEM;
 
-	t->type = pipe->type;
 	t->direction = umsg->urb.dir;
-	t->pipe = pipe;
 	t->transferred = 0;
 	t->size = umsg->urb.size;
 	t->cond = &usb_common.finishedCond;
@@ -168,14 +150,15 @@ static int usb_handleUrb(msg_t *msg, unsigned int port, unsigned long rid)
 	t->port = port;
 	t->rid = rid;
 
-	if ((ret = usb_transferSubmit(t, 0)) != 0) {
-		free(t->msg);
+	if (usb_drvTransfer(drv, t, umsg->urb.pipe) != 0) {
 		usb_free(t->buffer, t->size);
 		usb_free(t->setup, sizeof(usb_setup_packet_t));
+		free(t->msg);
 		free(t);
+		return -EINVAL;
 	}
 
-	return ret;
+	return EOK;
 }
 
 
@@ -205,35 +188,24 @@ static int usb_handleConnect(msg_t *msg, usb_connect_t *c)
 
 static int usb_handleOpen(usb_open_t *o, msg_t *msg)
 {
-	usb_dev_t *dev;
-	usb_iface_t *iface;
 	usb_drv_t *drv;
-	usb_pipe_t *pipe;
+	int pipe;
+	hcd_t *hcd;
 
 	if ((drv = usb_drvFind(msg->pid)) == NULL) {
 		fprintf(stderr, "usb: Fail to find driver pid: %d\n", msg->pid);
 		return -EINVAL;
 	}
 
-	if ((dev = hcd_devFind(usb_common.hcds, o->locationID)) == NULL) {
+	if ((hcd = hcd_find(usb_common.hcds, o->locationID)) == NULL) {
 		fprintf(stderr, "usb: Fail to find dev: %d\n", o->dev);
 		return -EINVAL;
 	}
 
-	if ((iface = usb_ifaceFind(dev, o->iface)) == NULL) {
-		fprintf(stderr, "usb: Fail to find iface: %d dev: %d\n", o->iface, dev->address);
-		return -EINVAL;
-	}
-
-	if (iface->driver != drv) {
-		fprintf(stderr, "usb: Interface and driver mismatch\n");
-		return -EINVAL;
-	}
-
-	if ((pipe = usb_drvPipeOpen(drv, dev, iface, o->dir, o->type)) == NULL)
+	if ((pipe = usb_drvPipeOpen(drv, hcd, o->locationID, o->iface, o->dir, o->type)) < 0)
 		return -EINVAL;
 
-	*(int *)msg->o.raw = pipe->linkage.id;
+	*(int *)msg->o.raw = pipe;
 
 	return 0;
 }
