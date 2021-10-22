@@ -433,7 +433,6 @@ void usb_devDisconnected(usb_dev_t *dev)
 }
 
 
-
 int usb_devInit(void)
 {
 	if (mutexCreate(&usbdev_common.lock) != 0) {

@@ -56,5 +56,4 @@ void usb_drvPipeFree(usb_drv_t *drv, usb_pipe_t *pipe);
 int usb_drvTransfer(usb_drv_t *drv, usb_transfer_t *t, int pipeId);
 
 
-
 #endif /* _USB_DRV_H_ */
