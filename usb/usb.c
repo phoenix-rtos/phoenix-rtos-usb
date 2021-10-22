@@ -319,37 +319,37 @@ int main(int argc, char *argv[])
 
 	if (mutexCreate(&usb_common.lock) != 0) {
 		fprintf(stderr, "usb: Can't create mutex!\n");
-		return -EINVAL;
+		return 1;
 	}
 
 	if (mutexCreate(&usb_common.transferLock) != 0) {
 		fprintf(stderr, "usb: Can't create mutex!\n");
-		return -EINVAL;
+		return 1;
 	}
 
 	if (condCreate(&usb_common.finishedCond) != 0) {
 		fprintf(stderr, "usb: Can't create mutex!\n");
-		return -EINVAL;
+		return 1;
 	}
 
 	if (usb_memInit() != 0) {
 		fprintf(stderr, "usb: Can't initiate memory management!\n");
-		return -EINVAL;
+		return 1;
 	}
 
 	if (usb_devInit() != 0) {
 		fprintf(stderr, "usb: Fail to init devices!\n");
-		return -EINVAL;
+		return 1;
 	}
 
 	if ((usb_common.hcds = hcd_init()) == NULL) {
 		fprintf(stderr, "usb: Fail to init hcds!\n");
-		return -EINVAL;
+		return 1;
 	}
 
 	if (portCreate(&usb_common.port) != 0) {
 		fprintf(stderr, "usb: Can't create port!\n");
-		return -EINVAL;
+		return 1;
 	}
 
 	oid.port = usb_common.port;
@@ -357,22 +357,22 @@ int main(int argc, char *argv[])
 
 	if (create_dev(&oid, "/dev/usb") != 0) {
 		fprintf(stderr, "usb: Can't create dev!\n");
-		return -EINVAL;
+		return 1;
 	}
 
 	if (usb_roothubsInit() != 0) {
 		fprintf(stderr, "usb: Fail to init roothubs!\n");
-		return -EINVAL;
+		return 1;
 	}
 
 	if (hub_init() != 0) {
 		fprintf(stderr, "usb: Fail to init hub driver!\n");
-		return -EINVAL;
+		return 1;
 	}
 
 	if (beginthread(usb_statusthr, 4, usb_common.stack, sizeof(usb_common.stack), NULL) != 0) {
 		fprintf(stderr, "usb: Fail to init hub driver!\n");
-		return -ENOMEM;
+		return 1;
 	}
 
 	usb_msgthr((void *)usb_common.port);
