@@ -93,5 +93,27 @@ typedef struct _usb_cdc_line_coding {
 	uint8_t bDataBits;
 } __attribute__((packed)) usb_cdc_line_coding_t;
 
+#define USB_CDC_SEND_ENCAPSULATED_COMMAND      0x00
+#define USB_CDC_GET_ENCAPSULATED_RESPONSE      0x01
+#define USB_CDC_REQ_SET_LINE_CODING            0x20
+#define USB_CDC_REQ_GET_LINE_CODING            0x21
+#define USB_CDC_REQ_SET_CONTROL_LINE_STATE     0x22
+#define USB_CDC_REQ_SEND_BREAK                 0x23
+#define USB_CDC_SET_ETHERNET_MULTICAST_FILTERS 0x40
+#define USB_CDC_SET_ETHERNET_PM_PATTERN_FILTER 0x41
+#define USB_CDC_GET_ETHERNET_PM_PATTERN_FILTER 0x42
+#define USB_CDC_SET_ETHERNET_PACKET_FILTER     0x43
+#define USB_CDC_GET_ETHERNET_STATISTIC         0x44
+#define USB_CDC_GET_NTB_PARAMETERS             0x80
+#define USB_CDC_GET_NET_ADDRESS                0x81
+#define USB_CDC_SET_NET_ADDRESS                0x82
+#define USB_CDC_GET_NTB_FORMAT                 0x83
+#define USB_CDC_SET_NTB_FORMAT                 0x84
+#define USB_CDC_GET_NTB_INPUT_SIZE             0x85
+#define USB_CDC_SET_NTB_INPUT_SIZE             0x86
+#define USB_CDC_GET_MAX_DATAGRAM_SIZE          0x87
+#define USB_CDC_SET_MAX_DATAGRAM_SIZE          0x88
+#define USB_CDC_GET_CRC_MODE                   0x89
+#define USB_CDC_SET_CRC_MODE                   0x8a
 
 #endif
