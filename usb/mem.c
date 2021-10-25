@@ -103,7 +103,7 @@ static usb_buf_t *usb_allocBuffer(void)
 	usb_buf_t *buf;
 
 	buf = usb_allocAligned(USB_BUF_SIZE, USB_BUF_SIZE);
-	if (buf == MAP_FAILED)
+	if (buf == NULL)
 		return NULL;
 
 	buf->next = NULL;
@@ -122,11 +122,11 @@ static void *usb_allocFrom(usb_buf_t *buf, size_t size)
 {
 	struct usb_chunk_hdr *prev, *next, *hdr = NULL;
 
-	if (buf->freesz > size) {
+	/* Search for a chunk in this buffer */
+	if (buf->freesz >= size) {
 		prev = buf->head;
 		hdr = buf->head;
 		if (hdr->size < size) {
-			/* Search for a chunk big enough */
 			hdr = hdr->next;
 			while (hdr != NULL && hdr->size < size) {
 				prev = hdr;
@@ -135,9 +135,13 @@ static void *usb_allocFrom(usb_buf_t *buf, size_t size)
 		}
 	}
 
+	/* No big enough chunks in this buffer */
 	if (hdr == NULL) {
-		if (buf->next == NULL)
-			buf->next = usb_allocBuffer();
+		/* Alloc next buffer */
+		if (buf->next == NULL) {
+			if ((buf->next = usb_allocBuffer()) == NULL)
+				return NULL;
+		}
 
 		return usb_allocFrom(buf->next, size);
 	}
@@ -237,7 +241,6 @@ void *usb_alloc(size_t size)
 		return usb_allocUncached(USB_BUF_SIZE);
 
 	mutexLock(usb_mem_common.lock);
-
 	ret = usb_allocFrom(usb_mem_common.buffer, size);
 	mutexUnlock(usb_mem_common.lock);
 
