@@ -15,7 +15,7 @@
 #include <errno.h>
 #include <stdio.h>
 #include <sys/list.h>
-#include <usbclient.h>
+#include "usbclient.h"
 #include "hid_client.h"
 
 
