@@ -301,9 +301,7 @@ int usb_drvBind(usb_dev_t *dev)
 			umsg->insertion.interface = i;
 			msgSend(drv->port, &msg);
 		}
-		else {
-			fprintf(stderr, "usb: Fail to match iface: %d\n", i);
-		}
+		/* TODO: Make a device orphaned */
 	}
 
 	return 0;

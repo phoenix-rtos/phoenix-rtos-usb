@@ -33,14 +33,23 @@
 #include "hcd.h"
 #include "dev.h"
 
-#define HUB_ENUM_RETRIES 3
+#define HUB_ENUM_RETRIES     3
+#define HUB_DEBOUNCE_STABLE  100000
+#define HUB_DEBOUNCE_PERIOD  25000
+#define HUB_DEBOUNCE_TIMEOUT 1500000
+
+
+typedef struct _hub_event {
+	struct _hub_event *next, *prev;
+	usb_dev_t *hub;
+} hub_event_t;
+
 
 struct {
 	char stack[4096] __attribute__((aligned(8)));
 	handle_t lock;
 	handle_t cond;
-	usb_dev_t *hubs;
-	int restart;
+	hub_event_t *events;
 } hub_common;
 
 
@@ -146,7 +155,7 @@ static int hub_interruptInit(usb_dev_t *hub)
 	if ((t->pipe = usb_pipeOpen(hub, 0, usb_dir_in, usb_transfer_interrupt)) == NULL) {
 		usb_free(t->buffer, sizeof(uint32_t));
 		free(t);
-		fprintf(stderr, "hub: Out of memory!\n");
+		fprintf(stderr, "hub: Fail to open interrupt pipe!\n");
 		return -ENOMEM;
 	}
 
@@ -161,17 +170,13 @@ static int hub_interruptInit(usb_dev_t *hub)
 }
 
 
-int hub_poll(usb_dev_t *hub)
+static int hub_poll(usb_dev_t *hub)
 {
-	hub->statusTransfer->finished = 0;
-	hub->statusTransfer->error = 0;
-	hub->statusTransfer->transferred = 0;
-
 	return usb_transferSubmit(hub->statusTransfer, 0);
 }
 
 
-int hub_clearPortFeatures(usb_dev_t *hub, int port, uint32_t change)
+static int hub_clearPortFeatures(usb_dev_t *hub, int port, uint32_t change)
 {
 	int i;
 
@@ -246,62 +251,85 @@ static void hub_devConnected(usb_dev_t *hub, int port)
 		}
 	} while (ret != 0 && retries > 0);
 
-	if (ret != 0) {
+	if (ret != 0)
 		usb_devDisconnected(dev);
-	}
 }
 
-
-static void hub_portStatusChanged(usb_dev_t *hub, int port)
+static int hub_portDebounce(usb_dev_t *hub, int port)
 {
 	usb_port_status_t status;
+	uint16_t pstatus = 0xffff;
+	int totalTime = 0, stableTime = 0;
+	int ret;
 
-	if (hub_getPortStatus(hub, port, &status) < 0) {
-		fprintf(stderr, "hub: getPortStatus port %d failed!\n", port);
-		return;
+	while (totalTime < HUB_DEBOUNCE_TIMEOUT) {
+		if ((ret = hub_getPortStatus(hub, port, &status)) < 0)
+			return ret;
+
+		if (!(status.wPortChange & USB_PORT_STAT_C_CONNECTION) &&
+				(status.wPortStatus & USB_PORT_STAT_CONNECTION) == pstatus) {
+			stableTime += HUB_DEBOUNCE_PERIOD;
+			if (stableTime >= HUB_DEBOUNCE_STABLE)
+				break;
+		}
+		else {
+			stableTime = 0;
+			pstatus = status.wPortStatus & USB_PORT_STAT_CONNECTION;
+		}
+
+		if (status.wPortChange & USB_PORT_STAT_C_CONNECTION)
+			hub_clearPortFeature(hub, port, USB_PORT_FEAT_C_CONNECTION);
+
+		totalTime += HUB_DEBOUNCE_PERIOD;
+		usleep(HUB_DEBOUNCE_PERIOD);
 	}
 
-	if (hub_clearPortFeatures(hub, port, status.wPortChange) < 0) {
-		fprintf(stderr, "hub: clearPortFeatures failed on port %d!\n", port);
+	if (stableTime < HUB_DEBOUNCE_STABLE)
+		return -ETIMEDOUT;
+
+	return pstatus;
+}
+
+
+static void hub_connectstatus(usb_dev_t *hub, int port, usb_port_status_t *status)
+{
+	int pstatus;
+
+	if (hub->devs[port - 1] != NULL)
+		usb_devDisconnected(hub->devs[port - 1]);
+
+	if ((pstatus = hub_portDebounce(hub, port)) < 0)
 		return;
-	}
+
+	if (pstatus)
+		hub_devConnected(hub, port);
+}
+
+
+static void hub_portstatus(usb_dev_t *hub, int port)
+{
+	usb_port_status_t status;
+	int connection = 0;
+
+	if (hub_getPortStatus(hub, port, &status) < 0)
+		return;
 
 	if (status.wPortChange & USB_PORT_STAT_C_CONNECTION) {
-		if (status.wPortStatus & USB_PORT_STAT_CONNECTION) {
-			/* required by modeswitch */
-			if (hub->devs[port - 1] != NULL)
-				usb_devDisconnected(hub->devs[port - 1]);
-			hub_devConnected(hub, port);
-		}
-		else if (hub->devs[port - 1] != NULL) {
-			usb_devDisconnected(hub->devs[port - 1]);
-		}
+		hub_clearPortFeature(hub, port, USB_PORT_FEAT_C_CONNECTION);
+		connection = 1;
 	}
 
-	/* TODO: handle other status changes */
-}
-
-
-static void hub_hubStatusChanged(usb_dev_t *hub)
-{
-}
-
-
-static void hub_statusChanged(usb_dev_t *hub, uint32_t status)
-{
-	int i;
-
-	if (status & 1)
-		hub_hubStatusChanged(hub);
-
-	for (i = 0; i < hub->nports; i++) {
-		if (status & (1 << (i + 1)))
-			hub_portStatusChanged(hub, i + 1);
+	if (status.wPortChange & USB_PORT_STAT_C_ENABLE) {
+		hub_clearPortFeature(hub, port, USB_PORT_FEAT_C_ENABLE);
+		if (!(status.wPortStatus & USB_PORT_STAT_ENABLE))
+			connection = 1;
 	}
 
-	/* Not a root hub */
-	if (hub->hub != NULL)
-		hub_poll(hub);
+	if (status.wPortChange & USB_PORT_STAT_C_RESET)
+		hub_clearPortFeature(hub, port, USB_PORT_FEAT_C_RESET);
+
+	if (connection)
+		hub_connectstatus(hub, port, &status);
 }
 
 
@@ -309,14 +337,11 @@ static uint32_t hub_getStatus(usb_dev_t *hub)
 {
 	uint32_t status = 0;
 
-	if (hub->hub == NULL) {
-		status = hub->hcd->ops->getRoothubStatus(hub);
-	}
-	else if (usb_transferCheck(hub->statusTransfer)) {
+	if (usb_transferCheck(hub->statusTransfer)) {
 		if (hub->statusTransfer->error == 0 && hub->statusTransfer->transferred > 0)
 			memcpy(&status, hub->statusTransfer->buffer, sizeof(status));
-		else
-			fprintf(stderr, "usb-hub: Interrupt transfer error\n");
+
+		hub_poll(hub);
 	}
 
 	return status;
@@ -325,40 +350,46 @@ static uint32_t hub_getStatus(usb_dev_t *hub)
 
 static void hub_thread(void *args)
 {
-	usb_dev_t *hub;
+	hub_event_t *ev;
 	uint32_t status;
+	int i;
+
+	for (;;) {
+		mutexLock(hub_common.lock);
+		while (hub_common.events == NULL)
+			condWait(hub_common.cond, hub_common.lock, 0);
+		ev = hub_common.events;
+		LIST_REMOVE(&hub_common.events, ev);
+		mutexUnlock(hub_common.lock);
+
+		status = hub_getStatus(ev->hub);
+		for (i = 0; i < ev->hub->nports; i++) {
+			if (status & (1 << (i + 1)))
+				hub_portstatus(ev->hub, i + 1);
+		}
+
+		free(ev);
+	}
+}
+
+
+void hub_notify(usb_dev_t *hub)
+{
+	hub_event_t *e;
+
+	if ((e = malloc(sizeof(hub_event_t))) == NULL)
+		return;
+
+	e->hub = hub;
 
 	mutexLock(hub_common.lock);
-	for (;;) {
-		condWait(hub_common.cond, hub_common.lock, 1000000);
-		hub = hub_common.hubs;
-		do {
-			if ((status = hub_getStatus(hub)) != 0)
-				hub_statusChanged(hub, status);
-			if (hub_common.restart) {
-				/* Hubs removed due to statusChanged */
-				hub_common.restart = 0;
-				break;
-			}
-		} while ((hub = hub->next) != hub_common.hubs);
-	}
+	LIST_ADD(&hub_common.events, e);
+	condSignal(hub_common.cond);
+	mutexUnlock(hub_common.lock);
 }
 
 
-void hub_remove(usb_dev_t *hub)
-{
-	LIST_REMOVE(&hub_common.hubs, hub);
-	hub_common.restart = 1;
-
-	if (hub->statusTransfer != NULL) {
-		usb_drvPipeFree(NULL, hub->statusTransfer->pipe);
-		usb_free(hub->statusTransfer->buffer, sizeof(uint32_t));
-		free(hub->statusTransfer);
-	}
-}
-
-
-int hub_add(usb_dev_t *hub)
+int hub_conf(usb_dev_t *hub)
 {
 	char buf[15];
 	usb_hub_desc_t *desc;
@@ -389,16 +420,11 @@ int hub_add(usb_dev_t *hub)
 			return -EINVAL;
 		}
 	}
-	LIST_ADD(&hub_common.hubs, hub);
 
-	/* Not a root hub */
-	if (hub->hub != NULL) {
-		if (hub_interruptInit(hub) != 0)
-			return -EINVAL;
-		return hub_poll(hub);
-	}
+	if (hub_interruptInit(hub) != 0)
+		return -EINVAL;
 
-	return 0;
+	return hub_poll(hub);
 }
 
 

@@ -113,10 +113,9 @@ static hcd_t *hcd_create(const hcd_ops_t *ops, const hcd_info_t *info, int num)
 	hcd->num = num;
 
 	/*
-	 * 0 is reserved for the enumerating device,
-	 * 1 is reserved for the roothub.
+	 * 0 address is reserved for the enumerating device,
 	 */
-	hcd->addrmask[0] = 0x3;
+	hcd->addrmask[0] = 0x1;
 	hcd->addrmask[1] = 0;
 	hcd->addrmask[2] = 0;
 	hcd->addrmask[3] = 0;
@@ -138,6 +137,22 @@ hcd_t *hcd_find(hcd_t *hcdList, uint32_t locationID)
 		return NULL;
 
 	return hcd;
+}
+
+
+static int hcd_roothubInit(hcd_t *hcd)
+{
+	usb_dev_t *hub;
+
+	if ((hub = usb_devAlloc()) == NULL)
+		return -ENOMEM;
+
+	hcd->roothub = hub;
+	hub->hub = NULL;
+	hub->port = 1;
+	hub->hcd = hcd;
+
+	return usb_devEnumerate(hub);
 }
 
 
@@ -165,6 +180,12 @@ hcd_t *hcd_init(void)
 
 		if (hcd->ops->init(hcd) != 0) {
 			fprintf(stderr, "usb-hcd: Fail to initialize hcd type: %s\n", info[i].type);
+			hcd_free(hcd);
+			continue;
+		}
+
+		if (hcd_roothubInit(hcd) != 0) {
+			fprintf(stderr, "usb-hcd: Fail to initialize roothub: %s\n", info[i].type);
 			hcd_free(hcd);
 			continue;
 		}
