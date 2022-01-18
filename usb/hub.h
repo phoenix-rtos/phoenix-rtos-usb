@@ -73,10 +73,10 @@ typedef struct usb_hub_desc {
 int hub_init(void);
 
 
-int hub_add(usb_dev_t *hub);
+int hub_conf(usb_dev_t *hub);
 
 
-void hub_remove(usb_dev_t *hub);
+void hub_notify(usb_dev_t *hub);
 
 
 void hub_interrupt(void);

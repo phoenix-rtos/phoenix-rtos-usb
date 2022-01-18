@@ -136,12 +136,17 @@ void usb_devFree(usb_dev_t *dev)
 	free(dev->serialNumber);
 	free(dev->conf);
 
-	for (i = 0; i < dev->nifs; i++) {
+	for (i = 0; i < dev->nifs; i++)
 		free(dev->ifs[i].str);
+
+	usb_drvPipeFree(NULL, dev->ctrlPipe);
+	if (dev->statusTransfer != NULL) {
+		usb_drvPipeFree(NULL, dev->statusTransfer->pipe);
+		usb_free(dev->statusTransfer->buffer, sizeof(uint32_t));
+		free(dev->statusTransfer);
 	}
 
 	free(dev->ifs);
-	usb_drvPipeFree(NULL, dev->ctrlPipe);
 	free(dev->devs);
 	free(dev);
 }
@@ -167,6 +172,11 @@ static int usb_genLocationID(usb_dev_t *dev)
 {
 	usb_dev_t *hub = dev->hub;
 	int tier = 1;
+
+	if (usb_isRoothub(dev)) {
+		dev->locationID = dev->hcd->num & 0xf;
+		return 0;
+	}
 
 	/* Allocate locationID */
 	dev->locationID = hub->locationID;
@@ -287,19 +297,16 @@ static int usb_getAllStringDescs(usb_dev_t *dev)
 	if (dev->desc.iManufacturer != 0) {
 		if (usb_getStringDesc(dev, &dev->manufacturer, dev->desc.iManufacturer) != 0)
 			return -ENOMEM;
-		printf("Manufacturer: %s\n", dev->manufacturer);
 	}
 
 	if (dev->desc.iProduct != 0) {
 		if (usb_getStringDesc(dev, &dev->product, dev->desc.iProduct) != 0)
 			return -ENOMEM;
-		printf("Product: %s\n", dev->product);
 	}
 
 	if (dev->desc.iSerialNumber != 0) {
 		if (usb_getStringDesc(dev, &dev->serialNumber, dev->desc.iSerialNumber) != 0)
 			return -ENOMEM;
-		printf("Serial Number: %s\n", dev->serialNumber);
 	}
 
 	for (i = 0; i < dev->nifs; i++) {
@@ -307,7 +314,6 @@ static int usb_getAllStringDescs(usb_dev_t *dev)
 			continue;
 		if (usb_getStringDesc(dev, &dev->ifs[i].str, dev->ifs[i].desc->iInterface) != 0)
 			return -ENOMEM;
-		printf("Interface string: %s\n", dev->ifs[i].str);
 	}
 
 	/* TODO: Configuration string descriptors */
@@ -342,7 +348,6 @@ int usb_devEnumerate(usb_dev_t *dev)
 		fprintf(stderr, "usb: Fail to set device address\n");
 		return -1;
 	}
-	fprintf(stderr, "usb: New device addr: %d locationID: %08x\n", dev->address, dev->locationID);
 
 	if (usb_getDevDesc(dev) < 0) {
 		fprintf(stderr, "usb: Fail to get device descriptor\n");
@@ -359,9 +364,14 @@ int usb_devEnumerate(usb_dev_t *dev)
 		return -1;
 	}
 
-	usb_devSetChild(dev->hub, dev->port, dev);
+	if (!usb_isRoothub(dev))
+		usb_devSetChild(dev->hub, dev->port, dev);
+
+	fprintf(stderr, "usb: New device addr: %d locationID: %08x %s, %s\n", dev->address, dev->locationID,
+		dev->manufacturer, dev->product);
+
 	if (dev->desc.bDeviceClass == USB_CLASS_HUB) {
-		if (hub_add(dev) != 0)
+		if (hub_conf(dev) != 0)
 			return -1;
 	}
 	else if (usb_drvBind(dev) != 0) {
@@ -377,20 +387,14 @@ static void usb_devUnbind(usb_dev_t *dev)
 {
 	int i;
 
-	fprintf(stderr, "usb: Device disconnected addr %d locationID: %08x\n", dev->address, dev->locationID);
 	for (i = 0; i < dev->nports; i++) {
 		if (dev->devs[i] != NULL)
 			usb_devUnbind(dev->devs[i]);
 	}
 
-	if (dev->desc.bDeviceClass == USB_CLASS_HUB) {
-		hub_remove(dev);
-	}
-	else {
-		for (i = 0; i < dev->nifs; i++) {
-			if (dev->ifs[i].driver)
-				usb_drvUnbind(dev->ifs[i].driver, dev, i);
-		}
+	for (i = 0; i < dev->nifs; i++) {
+		if (dev->ifs[i].driver)
+			usb_drvUnbind(dev->ifs[i].driver, dev, i);
 	}
 }
 
@@ -427,9 +431,16 @@ usb_dev_t *usb_devFind(usb_dev_t *hub, int locationID)
 
 void usb_devDisconnected(usb_dev_t *dev)
 {
+	printf("usb: Device disconnected addr %d locationID: %08x\n", dev->address, dev->locationID);
 	usb_devSetChild(dev->hub, dev->port, NULL);
 	usb_devUnbind(dev);
 	usb_devDestroy(dev);
+}
+
+
+int usb_isRoothub(usb_dev_t *dev)
+{
+	return (dev->hub == NULL);
 }
 
 

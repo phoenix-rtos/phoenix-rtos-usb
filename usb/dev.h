@@ -55,7 +55,6 @@ typedef struct _usb_dev {
 	struct _usb_dev **devs;
 	struct usb_transfer *statusTransfer;
 	int nports;
-	struct _usb_dev *prev, *next;
 } usb_dev_t;
 
 
@@ -78,6 +77,9 @@ int usb_devInit(void);
 
 
 void usb_devSetChild(usb_dev_t *parent, int port, usb_dev_t *child);
+
+
+int usb_isRoothub(usb_dev_t *dev);
 
 
 #endif /* _USB_DEV_H_ */
