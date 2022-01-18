@@ -63,6 +63,14 @@ int usb_transferSubmit(usb_transfer_t *t, int sync)
 	hcd_t *hcd = t->pipe->dev->hcd;
 	int ret = 0;
 
+	mutexLock(usb_common.transferLock);
+	t->finished = 0;
+	t->error = 0;
+	t->transferred = 0;
+	if (t->direction == usb_dir_in)
+		memset(t->buffer, 0, t->size);
+	mutexUnlock(usb_common.transferLock);
+
 	if ((ret = hcd->ops->transferEnqueue(hcd, t)) != 0)
 		return ret;
 
@@ -95,7 +103,11 @@ void usb_transferFinished(usb_transfer_t *t, int status)
 	/* URB Transfer */
 	if (t->msg != NULL)
 		LIST_ADD(&usb_common.finished, t);
-	condSignal(*t->cond);
+	else if (t->type == usb_transfer_interrupt)
+		hub_notify(t->pipe->dev);
+
+	if (t->cond != NULL)
+		condSignal(*t->cond);
 	mutexUnlock(usb_common.transferLock);
 }
 
@@ -291,27 +303,6 @@ static void usb_msgthr(void *arg)
 	}
 }
 
-static int usb_roothubsInit(void)
-{
-	usb_dev_t *hub;
-	hcd_t *hcd = usb_common.hcds;
-
-	do {
-		if ((hub = usb_devAlloc()) == NULL)
-			return -ENOMEM;
-
-		hcd->roothub = hub;
-		hub->address = 1;
-		hub->hub = NULL;
-		hub->locationID = hcd->num & 0xf;
-		hub->port = 1;
-		hub->hcd = hcd;
-		hub_add(hub);
-	} while ((hcd = hcd->next) != usb_common.hcds);
-
-	return 0;
-}
-
 
 int main(int argc, char *argv[])
 {
@@ -342,6 +333,11 @@ int main(int argc, char *argv[])
 		return 1;
 	}
 
+	if (hub_init() != 0) {
+		fprintf(stderr, "usb: Fail to init hub driver!\n");
+		return 1;
+	}
+
 	if ((usb_common.hcds = hcd_init()) == NULL) {
 		fprintf(stderr, "usb: Fail to init hcds!\n");
 		return 1;
@@ -357,16 +353,6 @@ int main(int argc, char *argv[])
 
 	if (create_dev(&oid, "/dev/usb") != 0) {
 		fprintf(stderr, "usb: Can't create dev!\n");
-		return 1;
-	}
-
-	if (usb_roothubsInit() != 0) {
-		fprintf(stderr, "usb: Fail to init roothubs!\n");
-		return 1;
-	}
-
-	if (hub_init() != 0) {
-		fprintf(stderr, "usb: Fail to init hub driver!\n");
 		return 1;
 	}
 
