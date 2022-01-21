@@ -117,25 +117,27 @@ static int usb_urbSubmitSync(usb_urb_t *urb, void *data)
 }
 
 
-int usb_transferControl(unsigned pipe, usb_setup_packet_t *setup, void *data, size_t size, usb_dir_t dir)
+int usb_transferControl(unsigned pipe, usb_setup_packet_t *setup, void *data, size_t size, usb_dir_t dir, time_t timeout)
 {
 	usb_urb_t urb = {
 		.pipe = pipe,
 		.setup = *setup,
 		.dir = dir,
-		.size = size
+		.size = size,
+		.timeout = timeout
 	};
 
 	return usb_urbSubmitSync(&urb, data);
 }
 
 
-int usb_transferBulk(unsigned pipe, void *data, size_t size, usb_dir_t dir)
+int usb_transferBulk(unsigned pipe, void *data, size_t size, usb_dir_t dir, time_t timeout)
 {
 	usb_urb_t urb = {
 		.pipe = pipe,
 		.dir = dir,
-		.size = size
+		.size = size,
+		.timeout = timeout
 	};
 
 	return usb_urbSubmitSync(&urb, data);
@@ -152,7 +154,7 @@ int usb_setConfiguration(unsigned pipe, int conf)
 		.wLength = 0,
 	};
 
-	return usb_transferControl(pipe, &setup, NULL, 0, usb_dir_out);
+	return usb_transferControl(pipe, &setup, NULL, 0, usb_dir_out, 2000);
 }
 
 
@@ -166,7 +168,7 @@ int usb_clearFeatureHalt(unsigned pipe, int ep)
 		.wLength = 0,
 	};
 
-	return usb_transferControl(pipe, &setup, NULL, 0, usb_dir_out);
+	return usb_transferControl(pipe, &setup, NULL, 0, usb_dir_out, 2000);
 }
 
 
@@ -270,7 +272,7 @@ int usb_modeswitchHandle(usb_devinfo_t *dev, const usb_modeswitch_t *mode)
 		return -EINVAL;
 
 	memcpy(msg, mode->msg, sizeof(msg));
-	if (usb_transferBulk(pipeOut, msg, sizeof(msg), usb_dir_out) < 0)
+	if (usb_transferBulk(pipeOut, msg, sizeof(msg), usb_dir_out, 2000) < 0)
 		return -EINVAL;
 
 	return 0;

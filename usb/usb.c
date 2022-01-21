@@ -35,81 +35,10 @@
 
 
 static struct {
-	char stack[4096] __attribute__((aligned(8)));
-	handle_t lock, transferLock;
-	handle_t finishedCond;
+	handle_t lock;
 	hcd_t *hcds;
-	usb_drv_t *drvs;
-	usb_transfer_t *finished;
-	int nhcd;
 	uint32_t port;
 } usb_common;
-
-
-int usb_transferCheck(usb_transfer_t *t)
-{
-	int val;
-
-	mutexLock(usb_common.transferLock);
-	val = t->finished;
-	mutexUnlock(usb_common.transferLock);
-
-	return val;
-}
-
-
-int usb_transferSubmit(usb_transfer_t *t, int sync)
-{
-	hcd_t *hcd = t->pipe->dev->hcd;
-	int ret = 0;
-
-	mutexLock(usb_common.transferLock);
-	t->finished = 0;
-	t->error = 0;
-	t->transferred = 0;
-	if (t->direction == usb_dir_in)
-		memset(t->buffer, 0, t->size);
-	mutexUnlock(usb_common.transferLock);
-
-	if ((ret = hcd->ops->transferEnqueue(hcd, t)) != 0)
-		return ret;
-
-	if (sync) {
-		mutexLock(usb_common.transferLock);
-		while (!t->finished)
-			condWait(*t->cond, usb_common.transferLock, 0);
-		mutexUnlock(usb_common.transferLock);
-	}
-
-	return ret;
-}
-
-
-/* Called by the hcd driver */
-void usb_transferFinished(usb_transfer_t *t, int status)
-{
-	mutexLock(usb_common.transferLock);
-	t->finished = 1;
-
-	if (status >= 0) {
-		t->transferred = status;
-		t->error = 0;
-	}
-	else {
-		t->transferred = 0;
-		t->error = -status;
-	}
-
-	/* URB Transfer */
-	if (t->msg != NULL)
-		LIST_ADD(&usb_common.finished, t);
-	else if (t->type == usb_transfer_interrupt)
-		hub_notify(t->pipe->dev);
-
-	if (t->cond != NULL)
-		condSignal(*t->cond);
-	mutexUnlock(usb_common.transferLock);
-}
 
 
 static int usb_devsList(char *buffer, size_t size)
@@ -135,7 +64,7 @@ static int usb_handleUrb(msg_t *msg, unsigned int port, unsigned long rid)
 	t->direction = umsg->urb.dir;
 	t->transferred = 0;
 	t->size = umsg->urb.size;
-	t->cond = &usb_common.finishedCond;
+	t->timeout = umsg->urb.timeout;
 
 	if ((t->msg = malloc(sizeof(msg_t))) == NULL) {
 		free(t);
@@ -223,35 +152,6 @@ static int usb_handleOpen(usb_open_t *o, msg_t *msg)
 }
 
 
-static void usb_statusthr(void *arg)
-{
-	usb_transfer_t *t;
-
-	for (;;) {
-		mutexLock(usb_common.transferLock);
-		while (usb_common.finished == NULL)
-			condWait(usb_common.finishedCond, usb_common.transferLock, 0);
-		t = usb_common.finished;
-		LIST_REMOVE(&usb_common.finished, t);
-		mutexUnlock(usb_common.transferLock);
-
-		if (t->type == usb_transfer_bulk || t->type == usb_transfer_control) {
-			t->msg->o.io.err = (t->error != 0) ? -t->error : t->transferred;
-
-			if (t->direction == usb_dir_in)
-				memcpy(t->msg->o.data, t->buffer, t->transferred);
-
-			/* TODO: it should be non-blocking */
-			msgRespond(t->port, t->msg, t->rid);
-			free(t->msg);
-			usb_free(t->buffer, t->size);
-			usb_free(t->setup, sizeof(usb_setup_packet_t));
-			free(t);
-		}
-	}
-}
-
-
 static void usb_msgthr(void *arg)
 {
 	unsigned port = (int)arg;
@@ -313,16 +213,6 @@ int main(int argc, char *argv[])
 		return 1;
 	}
 
-	if (mutexCreate(&usb_common.transferLock) != 0) {
-		fprintf(stderr, "usb: Can't create mutex!\n");
-		return 1;
-	}
-
-	if (condCreate(&usb_common.finishedCond) != 0) {
-		fprintf(stderr, "usb: Can't create mutex!\n");
-		return 1;
-	}
-
 	if (usb_memInit() != 0) {
 		fprintf(stderr, "usb: Can't initiate memory management!\n");
 		return 1;
@@ -353,11 +243,6 @@ int main(int argc, char *argv[])
 
 	if (create_dev(&oid, "/dev/usb") != 0) {
 		fprintf(stderr, "usb: Can't create dev!\n");
-		return 1;
-	}
-
-	if (beginthread(usb_statusthr, 4, usb_common.stack, sizeof(usb_common.stack), NULL) != 0) {
-		fprintf(stderr, "usb: Fail to init hub driver!\n");
 		return 1;
 	}
 

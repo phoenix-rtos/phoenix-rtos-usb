@@ -39,10 +39,10 @@ typedef struct usb_transfer {
 	struct usb_transfer *next, *prev;
 	usb_pipe_t *pipe;
 	usb_setup_packet_t *setup;
-	handle_t *cond;
 
 	unsigned async;
 	unsigned id;
+	int block;
 	volatile int finished;
 	volatile int error;
 	volatile int aborted;
@@ -50,6 +50,8 @@ typedef struct usb_transfer {
 	char *buffer;
 	size_t size;
 	size_t transferred;
+	time_t timeout;
+	time_t elapsed;
 	int type;
 	int direction;
 
@@ -77,15 +79,6 @@ void *usb_allocAligned(size_t size, size_t alignment);
 
 
 void usb_freeAligned(void *addr, size_t size);
-
-
-void usb_transferFinished(usb_transfer_t *t, int status);
-
-
-int usb_transferCheck(usb_transfer_t *t);
-
-
-int usb_transferSubmit(usb_transfer_t *t, int sync);
 
 
 #endif

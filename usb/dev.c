@@ -32,7 +32,6 @@
 
 struct {
 	handle_t lock;
-	handle_t cond;
 	char *ctrlBuf;
 	char *setupBuf;
 } usbdev_common;
@@ -47,7 +46,7 @@ int usb_devCtrl(usb_dev_t *dev, usb_dir_t dir, usb_setup_packet_t *setup, char *
 		.setup = (usb_setup_packet_t *)usbdev_common.setupBuf,
 		.buffer = usbdev_common.ctrlBuf,
 		.size = len,
-		.cond = &usbdev_common.cond
+		.timeout = 1000
 	};
 	int ret;
 
@@ -58,8 +57,7 @@ int usb_devCtrl(usb_dev_t *dev, usb_dir_t dir, usb_setup_packet_t *setup, char *
 	if (dir == usb_dir_out && len > 0)
 		memcpy(usbdev_common.ctrlBuf, buf, len);
 
-	if ((ret = usb_transferSubmit(&t, 1)) != 0) {
-		mutexUnlock(usbdev_common.lock);
+	if ((ret = hcd_transfer(dev->hcd, &t, 1)) != 0) {
 		return ret;
 	}
 
@@ -451,15 +449,8 @@ int usb_devInit(void)
 		return -ENOMEM;
 	}
 
-	if (condCreate(&usbdev_common.cond) != 0) {
-		resourceDestroy(usbdev_common.lock);
-		fprintf(stderr, "usbdev: Can't create cond!\n");
-		return -ENOMEM;
-	}
-
 	if ((usbdev_common.setupBuf = usb_alloc(USBDEV_BUF_SIZE)) == NULL) {
 		resourceDestroy(usbdev_common.lock);
-		resourceDestroy(usbdev_common.cond);
 		fprintf(stderr, "usbdev: Fail to allocate buffer!\n");
 		return -ENOMEM;
 	}

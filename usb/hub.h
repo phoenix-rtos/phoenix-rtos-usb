@@ -79,7 +79,4 @@ int hub_conf(usb_dev_t *hub);
 void hub_notify(usb_dev_t *hub);
 
 
-void hub_interrupt(void);
-
-
 #endif

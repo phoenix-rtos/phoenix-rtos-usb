@@ -171,7 +171,7 @@ int usb_drvTransfer(usb_drv_t *drv, usb_transfer_t *t, int pipeId)
 	if (pipe != NULL) {
 		t->pipe = pipe;
 		t->type = pipe->type;
-		ret = usb_transferSubmit(t, 0);
+		ret = hcd_transfer(pipe->dev->hcd, t, 0);
 	}
 	mutexUnlock(usbdrv_common.lock);
 
@@ -305,6 +305,28 @@ int usb_drvBind(usb_dev_t *dev)
 	}
 
 	return 0;
+}
+
+
+void usb_transferFree(usb_transfer_t *t)
+{
+	/* TODO: update pipe refcnt */
+	free(t->msg);
+	usb_free(t->buffer, t->size);
+	usb_free(t->setup, sizeof(usb_setup_packet_t));
+	free(t);
+}
+
+
+void usb_drvRespond(usb_transfer_t *t)
+{
+	t->msg->o.io.err = (t->error != 0) ? -t->error : t->transferred;
+
+	if (t->direction == usb_dir_in)
+		memcpy(t->msg->o.data, t->buffer, t->transferred);
+
+	msgRespond(t->port, t->msg, t->rid);
+	usb_transferFree(t);
 }
 
 

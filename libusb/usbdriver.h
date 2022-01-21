@@ -54,6 +54,7 @@ typedef struct {
 typedef struct {
 	int pipe;
 	int size;
+	time_t timeout;
 	usb_setup_packet_t setup;
 	usb_dir_t dir;
 } usb_urb_t;
@@ -136,10 +137,10 @@ int usb_eventsWait(int port, msg_t *msg);
 int usb_open(usb_devinfo_t *dev, usb_transfer_type_t type, usb_dir_t dir);
 
 
-int usb_transferControl(unsigned pipe, usb_setup_packet_t *setup, void *data, size_t size, usb_dir_t dir);
+int usb_transferControl(unsigned pipe, usb_setup_packet_t *setup, void *data, size_t size, usb_dir_t dir, time_t timeout);
 
 
-int usb_transferBulk(unsigned pipe, void *data, size_t size, usb_dir_t dir);
+int usb_transferBulk(unsigned pipe, void *data, size_t size, usb_dir_t dir, time_t timeout);
 
 
 int usb_setConfiguration(unsigned pipe, int conf);
