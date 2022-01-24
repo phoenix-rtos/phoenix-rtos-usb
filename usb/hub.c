@@ -39,17 +39,11 @@
 #define HUB_DEBOUNCE_TIMEOUT 1500000
 
 
-typedef struct _hub_event {
-	struct _hub_event *next, *prev;
-	usb_dev_t *hub;
-} hub_event_t;
-
-
 struct {
 	char stack[4096] __attribute__((aligned(8)));
 	handle_t lock;
 	handle_t cond;
-	hub_event_t *events;
+	usb_transfer_t *events;
 } hub_common;
 
 
@@ -137,41 +131,40 @@ static int hub_setPortFeature(usb_dev_t *hub, int port, uint16_t wValue)
 }
 
 
-static int hub_interruptInit(usb_dev_t *hub)
+static usb_transfer_t *hub_interruptInit(usb_dev_t *hub)
 {
 	usb_transfer_t *t;
 
 	if ((t = calloc(1, sizeof(usb_transfer_t))) == NULL) {
 		fprintf(stderr, "hub: Out of memory!\n");
-		return -ENOMEM;
+		return NULL;
 	}
 
 	if ((t->buffer = usb_alloc(sizeof(uint32_t))) == NULL) {
 		free(t);
 		fprintf(stderr, "hub: Out of memory!\n");
-		return -ENOMEM;
+		return NULL;
 	}
 
-	if ((t->pipe = usb_pipeOpen(hub, 0, usb_dir_in, usb_transfer_interrupt)) == NULL) {
+	if ((hub->irqpipe = usb_pipeOpen(hub, 0, usb_dir_in, usb_transfer_interrupt)) == NULL) {
 		usb_free(t->buffer, sizeof(uint32_t));
 		free(t);
 		fprintf(stderr, "hub: Fail to open interrupt pipe!\n");
-		return -ENOMEM;
+		return NULL;
 	}
 
 	t->type = usb_transfer_interrupt;
 	t->direction = usb_dir_in;
 	t->size = (hub->nports / 8) + 1;
+	t->pipe = hub->irqpipe;
 
-	hub->statusTransfer = t;
-
-	return 0;
+	return t;
 }
 
 
-static int hub_poll(usb_dev_t *hub)
+static int hub_poll(usb_dev_t *hub, usb_transfer_t *t)
 {
-	return hcd_transfer(hub->hcd, hub->statusTransfer, 0);
+	return hcd_transfer(hub->hcd, t, 0);
 }
 
 
@@ -211,49 +204,6 @@ int hub_portReset(usb_dev_t *hub, int port, usb_port_status_t *status)
 }
 
 
-static void hub_devConnected(usb_dev_t *hub, int port)
-{
-	usb_dev_t *dev;
-	usb_port_status_t status;
-	int ret;
-	int retries = HUB_ENUM_RETRIES;
-
-	if ((dev = usb_devAlloc()) == NULL) {
-		fprintf(stderr, "hub: Not enough memory to allocate a new device!\n");
-		return;
-	}
-
-	dev->hub = hub;
-	dev->hcd = hub->hcd;
-	dev->port = port;
-
-	do {
-		if ((ret = hub_portReset(hub, port, &status)) < 0) {
-			fprintf(stderr, "hub: fail to reset port %d\n", port);
-			break;
-		}
-
-		if (status.wPortStatus & USB_PORT_STAT_HIGH_SPEED)
-			dev->speed = usb_high_speed;
-		else if (status.wPortStatus & USB_PORT_STAT_LOW_SPEED)
-			dev->speed = usb_low_speed;
-		else
-			dev->speed = usb_full_speed;
-
-		ret = usb_devEnumerate(dev);
-		retries--;
-		if (ret != 0) {
-			fprintf(stderr, "usb: Enumeration failed retries left: %d\n", retries);
-			dev->hcd->ops->pipeDestroy(dev->hcd, dev->ctrlPipe);
-			dev->address = 0;
-			dev->locationID = 0;
-		}
-	} while (ret != 0 && retries > 0);
-
-	if (ret != 0)
-		usb_devDisconnected(dev);
-}
-
 static int hub_portDebounce(usb_dev_t *hub, int port)
 {
 	usb_port_status_t status;
@@ -287,6 +237,53 @@ static int hub_portDebounce(usb_dev_t *hub, int port)
 		return -ETIMEDOUT;
 
 	return pstatus;
+}
+
+
+static void hub_devConnected(usb_dev_t *hub, int port)
+{
+	usb_dev_t *dev;
+	usb_port_status_t status;
+	int ret;
+	int retries = HUB_ENUM_RETRIES;
+
+	if ((dev = usb_devAlloc(hub->hcd, hub, port)) == NULL) {
+		fprintf(stderr, "hub: Not enough memory to allocate a new device!\n");
+		return;
+	}
+
+	do {
+		if ((ret = hub_portReset(hub, port, &status)) < 0) {
+			fprintf(stderr, "hub: fail to reset port %d\n", port);
+			break;
+		}
+
+		if (status.wPortStatus & USB_PORT_STAT_HIGH_SPEED)
+			dev->speed = usb_high_speed;
+		else if (status.wPortStatus & USB_PORT_STAT_LOW_SPEED)
+			dev->speed = usb_low_speed;
+		else
+			dev->speed = usb_full_speed;
+
+		dev->ctrlPipe->speed = dev->speed;
+		ret = usb_devEnumerate(dev);
+		retries--;
+		if (ret != 0 && !hub_portDebounce(hub, port)) {
+			printf("usb: Enumeration failed. No retrying\n");
+			break;
+		}
+		else if (ret != 0) {
+			printf("usb: Enumeration failed retries left: %d\n", retries);
+			dev->hcd->ops->pipeDestroy(dev->hcd, dev->ctrlPipe);
+			if (dev->address != 0)
+				hcd_addrFree(hub->hcd, dev->address);
+			dev->address = 0;
+			dev->locationID = 0;
+		}
+	} while (ret != 0 && retries > 0);
+
+	if (ret != 0)
+		usb_devDisconnected(dev);
 }
 
 
@@ -332,14 +329,11 @@ static void hub_portstatus(usb_dev_t *hub, int port)
 }
 
 
-static uint32_t hub_getStatus(usb_dev_t *hub)
+static uint32_t hub_getStatus(usb_transfer_t *t)
 {
 	uint32_t status = 0;
 
-	if (hub->statusTransfer->error == 0 && hub->statusTransfer->transferred > 0) {
-		memcpy(&status, hub->statusTransfer->buffer, sizeof(status));
-		hub_poll(hub);
-	}
+	memcpy(&status, t->buffer, sizeof(status));
 
 	return status;
 }
@@ -347,7 +341,8 @@ static uint32_t hub_getStatus(usb_dev_t *hub)
 
 static void hub_thread(void *args)
 {
-	hub_event_t *ev;
+	usb_transfer_t *ev;
+	usb_dev_t *hub;
 	uint32_t status;
 	int i;
 
@@ -359,28 +354,32 @@ static void hub_thread(void *args)
 		LIST_REMOVE(&hub_common.events, ev);
 		mutexUnlock(hub_common.lock);
 
-		status = hub_getStatus(ev->hub);
-		for (i = 0; i < ev->hub->nports; i++) {
-			if (status & (1 << (i + 1)))
-				hub_portstatus(ev->hub, i + 1);
-		}
+		hub = usb_devFind(ev->pipe->hcd->roothub, ev->pipe->dlocationID);
+		if (hub != NULL) {
+			status = hub_getStatus(ev);
+			for (i = 0; i < hub->nports; i++) {
+				if (status & (1 << (i + 1)))
+					hub_portstatus(hub, i + 1);
+			}
 
-		free(ev);
+			hub_poll(hub, ev);
+		}
+		else {
+			usb_transferFree(ev);
+		}
 	}
 }
 
 
-void hub_notify(usb_dev_t *hub)
+void hub_notify(usb_transfer_t *t)
 {
-	hub_event_t *e;
-
-	if ((e = malloc(sizeof(hub_event_t))) == NULL)
+	if (t->pipe == NULL || t->error != 0) {
+		usb_transferFree(t);
 		return;
-
-	e->hub = hub;
+	}
 
 	mutexLock(hub_common.lock);
-	LIST_ADD(&hub_common.events, e);
+	LIST_ADD(&hub_common.events, t);
 	condSignal(hub_common.cond);
 	mutexUnlock(hub_common.lock);
 }
@@ -390,6 +389,7 @@ int hub_conf(usb_dev_t *hub)
 {
 	char buf[15];
 	usb_hub_desc_t *desc;
+	usb_transfer_t *t;
 	int i;
 
 	if (hub_setConf(hub, 1) < 0) {
@@ -418,10 +418,10 @@ int hub_conf(usb_dev_t *hub)
 		}
 	}
 
-	if (hub_interruptInit(hub) != 0)
+	if ((t = hub_interruptInit(hub)) == NULL)
 		return -EINVAL;
 
-	return hub_poll(hub);
+	return hub_poll(hub, t);
 }
 
 

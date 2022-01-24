@@ -23,6 +23,7 @@
 typedef struct {
 	idnode_t linkage;
 	struct _usb_drv *drv;
+	struct hcd *hcd;
 
 	usb_transfer_type_t type;
 	usb_dir_t dir;
@@ -30,7 +31,10 @@ typedef struct {
 	int maxPacketLen;
 	int interval;
 	int num;
-	struct _usb_dev *dev;
+	int devaddr;
+	int speed;
+	uint32_t dlocationID;
+
 	void *hcdpriv;
 } usb_pipe_t;
 

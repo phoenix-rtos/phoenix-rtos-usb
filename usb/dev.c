@@ -96,12 +96,13 @@ static int usb_setAddress(usb_dev_t *dev, int address)
 		return -1;
 
 	dev->address = address;
+	dev->ctrlPipe->devaddr = address;
 
 	return 0;
 }
 
 
-usb_dev_t *usb_devAlloc(void)
+usb_dev_t *usb_devAlloc(hcd_t *hcd, usb_dev_t *hub, int port)
 {
 	usb_dev_t *dev;
 	usb_pipe_t *ctrlPipe;
@@ -109,15 +110,18 @@ usb_dev_t *usb_devAlloc(void)
 	if ((dev = calloc(1, sizeof(usb_dev_t))) == NULL)
 		return NULL;
 
-	/* Create control endpoint */
+	/* Create control pipe */
 	if ((ctrlPipe = calloc(1, sizeof(usb_pipe_t))) == NULL) {
 		free(dev);
 		return NULL;
 	}
 
+	dev->hcd = hcd;
+	dev->hub = hub;
+	dev->port = port;
 	ctrlPipe->maxPacketLen = 64;
 	ctrlPipe->num = 0;
-	ctrlPipe->dev = dev;
+	ctrlPipe->hcd = hcd;
 	ctrlPipe->type = usb_transfer_control;
 	dev->ctrlPipe = ctrlPipe;
 
@@ -138,11 +142,8 @@ void usb_devFree(usb_dev_t *dev)
 		free(dev->ifs[i].str);
 
 	usb_drvPipeFree(NULL, dev->ctrlPipe);
-	if (dev->statusTransfer != NULL) {
-		usb_drvPipeFree(NULL, dev->statusTransfer->pipe);
-		usb_free(dev->statusTransfer->buffer, sizeof(uint32_t));
-		free(dev->statusTransfer);
-	}
+	if (dev->irqpipe != NULL)
+		usb_drvPipeFree(NULL, dev->irqpipe);
 
 	free(dev->ifs);
 	free(dev->devs);
@@ -389,6 +390,7 @@ static void usb_devUnbind(usb_dev_t *dev)
 		if (dev->devs[i] != NULL)
 			usb_devUnbind(dev->devs[i]);
 	}
+	printf("usb: Device disconnected addr %d locationID: %08x\n", dev->address, dev->locationID);
 
 	for (i = 0; i < dev->nifs; i++) {
 		if (dev->ifs[i].driver)
@@ -429,7 +431,6 @@ usb_dev_t *usb_devFind(usb_dev_t *hub, int locationID)
 
 void usb_devDisconnected(usb_dev_t *dev)
 {
-	printf("usb: Device disconnected addr %d locationID: %08x\n", dev->address, dev->locationID);
 	usb_devSetChild(dev->hub, dev->port, NULL);
 	usb_devUnbind(dev);
 	usb_devDestroy(dev);

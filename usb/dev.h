@@ -53,7 +53,7 @@ typedef struct _usb_dev {
 
 	/* Hub fields */
 	struct _usb_dev **devs;
-	struct usb_transfer *statusTransfer;
+	usb_pipe_t *irqpipe;
 	int nports;
 } usb_dev_t;
 
@@ -64,7 +64,7 @@ usb_dev_t *usb_devFind(usb_dev_t *hub, int locationID);
 int usb_devCtrl(usb_dev_t *dev, usb_dir_t dir, usb_setup_packet_t *setup, char *buf, size_t len);
 
 
-usb_dev_t *usb_devAlloc(void);
+usb_dev_t *usb_devAlloc(struct hcd *hcd, usb_dev_t *hub, int port);
 
 
 int usb_devEnumerate(usb_dev_t *dev);

@@ -38,7 +38,7 @@ void usb_drvPipeFree(usb_drv_t *drv, usb_pipe_t *pipe)
 	if (drv != NULL)
 		idtree_remove(&drv->pipes, &pipe->linkage);
 
-	pipe->dev->hcd->ops->pipeDestroy(pipe->dev->hcd, pipe);
+	pipe->hcd->ops->pipeDestroy(pipe->hcd, pipe);
 	free(pipe);
 	mutexUnlock(usbdrv_common.lock);
 }
@@ -70,7 +70,10 @@ static usb_pipe_t *usb_pipeAlloc(usb_drv_t *drv, usb_dev_t *dev, usb_endpoint_de
 	if ((pipe = malloc(sizeof(usb_pipe_t))) == NULL)
 		return NULL;
 
-	pipe->dev = dev;
+	pipe->hcd = dev->hcd;
+	pipe->devaddr = dev->address;
+	pipe->speed = dev->speed;
+	pipe->dlocationID = dev->locationID;
 	pipe->num = desc->bEndpointAddress & 0xF;
 	pipe->dir = (desc->bEndpointAddress & 0x80) ? usb_dir_in : usb_dir_out;
 	pipe->maxPacketLen = desc->wMaxPacketSize;
@@ -171,7 +174,7 @@ int usb_drvTransfer(usb_drv_t *drv, usb_transfer_t *t, int pipeId)
 	if (pipe != NULL) {
 		t->pipe = pipe;
 		t->type = pipe->type;
-		ret = hcd_transfer(pipe->dev->hcd, t, 0);
+		ret = hcd_transfer(pipe->hcd, t, 0);
 	}
 	mutexUnlock(usbdrv_common.lock);
 
@@ -262,7 +265,7 @@ int usb_drvUnbind(usb_drv_t *drv, usb_dev_t *dev, int iface)
 	mutexLock(usbdrv_common.lock);
 	while ((n = lib_rbMinimum(drv->pipes.root)) != NULL) {
 		pipe = lib_treeof(usb_pipe_t, linkage, n);
-		if (pipe->dev == dev) {
+		if (pipe->devaddr == dev->address && pipe->hcd == dev->hcd) {
 			lib_rbRemove(&drv->pipes, n);
 			dev->hcd->ops->pipeDestroy(dev->hcd, pipe);
 			free(pipe);

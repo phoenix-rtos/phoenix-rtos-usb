@@ -76,7 +76,7 @@ int hub_init(void);
 int hub_conf(usb_dev_t *hub);
 
 
-void hub_notify(usb_dev_t *hub);
+void hub_notify(usb_transfer_t *t);
 
 
 #endif

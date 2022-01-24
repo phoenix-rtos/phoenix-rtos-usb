@@ -133,6 +133,7 @@ static hcd_t *hcd_create(const hcd_ops_t *ops, const hcd_info_t *info, int num)
 	hcd->priv = NULL;
 	hcd->transfers = NULL;
 	hcd->finished = NULL;
+	hcd->status = NULL;
 	hcd->ops = ops;
 	hcd->num = num;
 
@@ -168,13 +169,10 @@ static int hcd_roothubInit(hcd_t *hcd)
 {
 	usb_dev_t *hub;
 
-	if ((hub = usb_devAlloc()) == NULL)
+	if ((hub = usb_devAlloc(hcd, NULL, 1)) == NULL)
 		return -ENOMEM;
 
 	hcd->roothub = hub;
-	hub->hub = NULL;
-	hub->port = 1;
-	hub->hcd = hcd;
 
 	return usb_devEnumerate(hub);
 }
@@ -183,16 +181,19 @@ static int hcd_roothubInit(hcd_t *hcd)
 void hcd_portStatus(hcd_t *hcd)
 {
 	usb_dev_t *hub = hcd->roothub;
+	usb_transfer_t *t;
 	uint32_t status;
 
 	status = hcd->ops->getRoothubStatus(hub);
 	mutexLock(hcd->transLock);
-	if (!hub->statusTransfer->finished) {
-		memcpy(hub->statusTransfer->buffer, &status, sizeof(status));
-		hub->statusTransfer->finished = 1;
-		hub->statusTransfer->error = 0;
-		hub->statusTransfer->transferred = sizeof(status);
-		hub_notify(hub);
+	t = hcd->status;
+	if (t) {
+		memcpy(hcd->status->buffer, &status, sizeof(status));
+		t->finished = 1;
+		t->error = 0;
+		t->transferred = sizeof(status);
+		hcd->status = NULL;
+		hub_notify(t);
 	}
 	mutexUnlock(hcd->transLock);
 }
@@ -206,7 +207,6 @@ void hcd_notify(hcd_t *hcd)
 
 int hcd_transfer(hcd_t *hcd, usb_transfer_t *t, int block)
 {
-	usb_dev_t *dev = t->pipe->dev;
 	int ret;
 
 	mutexLock(hcd->transLock);
@@ -218,11 +218,11 @@ int hcd_transfer(hcd_t *hcd, usb_transfer_t *t, int block)
 	if (t->direction == usb_dir_in)
 		memset(t->buffer, 0, t->size);
 
-	if (usb_isRoothub(dev)) {
-		if (dev != hcd->roothub)
-			ret = -EINVAL;
-		else
-			ret = hcd->ops->roothubTransfer(hcd, t);
+	if (t->pipe->devaddr == hcd->roothub->address) {
+		if (t->type == usb_transfer_interrupt && hcd->status == NULL)
+			hcd->status = t;
+
+		ret = hcd->ops->roothubTransfer(hcd, t);
 	}
 	else {
 		ret = hcd->ops->transferEnqueue(hcd, t);
@@ -230,11 +230,12 @@ int hcd_transfer(hcd_t *hcd, usb_transfer_t *t, int block)
 			LIST_ADD(&hcd->transfers, t);
 	}
 
-	if (block) {
+	if (block && ret == 0) {
 		while (!t->finished)
 			condWait(hcd->blockCond, hcd->transLock, 0);
 	}
 	mutexUnlock(hcd->transLock);
+
 
 	return ret;
 }
@@ -257,9 +258,9 @@ static void _hcd_update(hcd_t *hcd, time_t diff)
 
 		if (t->elapsed > t->timeout && !t->finished) {
 			t->finished = 1;
-			t->error = -ETIMEDOUT;
+			t->error = ETIMEDOUT;
+			printf("TIMEOUT\n");
 			hcd->ops->transferDequeue(hcd, t);
-			printf("TRANSFER TIMEOUT dir: %d\n", t->direction);
 		}
 
 		if (t->finished) {
@@ -308,7 +309,7 @@ static void hcd_thread(void *arg)
 			else if (t->msg)
 				usb_drvRespond(t);
 			else if (t->type == usb_transfer_interrupt)
-				hub_notify(t->pipe->dev);
+				hub_notify(t);
 		}
 	}
 }

@@ -48,6 +48,7 @@ typedef struct hcd {
 	const hcd_info_t *info;
 	const hcd_ops_t *ops;
 	usb_dev_t *roothub;
+	usb_transfer_t *status;
 	int num;
 
 	uint32_t addrmask[4];
