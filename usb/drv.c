@@ -323,7 +323,15 @@ void usb_transferFree(usb_transfer_t *t)
 
 void usb_drvRespond(usb_transfer_t *t)
 {
-	t->msg->o.io.err = (t->error != 0) ? -t->error : t->transferred;
+	if (t->error == 0)
+		t->msg->o.io.err = t->transferred;
+	else if (t->error == ETIMEDOUT)
+		t->msg->o.io.err = -ETIMEDOUT;
+	else if (t->pipe == NULL)
+		/* pipe not available */
+		t->msg->o.io.err = -EPIPE;
+	else
+		t->msg->o.io.err = -EIO;
 
 	if (t->direction == usb_dir_in)
 		memcpy(t->msg->o.data, t->buffer, t->transferred);
