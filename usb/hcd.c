@@ -11,6 +11,7 @@
  * %LICENSE%
  */
 
+#include <errno.h>
 #include <sys/list.h>
 #include <sys/threads.h>
 #include <string.h>

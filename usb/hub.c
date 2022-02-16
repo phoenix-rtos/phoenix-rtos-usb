@@ -212,49 +212,6 @@ int hub_portReset(usb_dev_t *hub, int port, usb_port_status_t *status)
 }
 
 
-static void hub_devConnected(usb_dev_t *hub, int port)
-{
-	usb_dev_t *dev;
-	usb_port_status_t status;
-	int ret;
-	int retries = HUB_ENUM_RETRIES;
-
-	if ((dev = usb_devAlloc()) == NULL) {
-		fprintf(stderr, "hub: Not enough memory to allocate a new device!\n");
-		return;
-	}
-
-	dev->hub = hub;
-	dev->hcd = hub->hcd;
-	dev->port = port;
-
-	do {
-		if ((ret = hub_portReset(hub, port, &status)) < 0) {
-			fprintf(stderr, "hub: fail to reset port %d\n", port);
-			break;
-		}
-
-		if (status.wPortStatus & USB_PORT_STAT_HIGH_SPEED)
-			dev->speed = usb_high_speed;
-		else if (status.wPortStatus & USB_PORT_STAT_LOW_SPEED)
-			dev->speed = usb_low_speed;
-		else
-			dev->speed = usb_full_speed;
-
-		ret = usb_devEnumerate(dev);
-		retries--;
-		if (ret != 0) {
-			fprintf(stderr, "usb: Enumeration failed retries left: %d\n", retries);
-			dev->hcd->ops->pipeDestroy(dev->hcd, dev->ctrlPipe);
-			dev->address = 0;
-			dev->locationID = 0;
-		}
-	} while (ret != 0 && retries > 0);
-
-	if (ret != 0)
-		usb_devDisconnected(dev);
-}
-
 static int hub_portDebounce(usb_dev_t *hub, int port)
 {
 	usb_port_status_t status;
@@ -288,6 +245,56 @@ static int hub_portDebounce(usb_dev_t *hub, int port)
 		return -ETIMEDOUT;
 
 	return pstatus;
+}
+
+
+static void hub_devConnected(usb_dev_t *hub, int port)
+{
+	usb_dev_t *dev;
+	usb_port_status_t status;
+	int ret;
+	int retries = HUB_ENUM_RETRIES;
+
+	if ((dev = usb_devAlloc()) == NULL) {
+		fprintf(stderr, "hub: Not enough memory to allocate a new device!\n");
+		return;
+	}
+
+	dev->hub = hub;
+	dev->hcd = hub->hcd;
+	dev->port = port;
+
+	do {
+		if ((ret = hub_portReset(hub, port, &status)) < 0) {
+			fprintf(stderr, "hub: fail to reset port %d\n", port);
+			break;
+		}
+
+		if (status.wPortStatus & USB_PORT_STAT_HIGH_SPEED)
+			dev->speed = usb_high_speed;
+		else if (status.wPortStatus & USB_PORT_STAT_LOW_SPEED)
+			dev->speed = usb_low_speed;
+		else
+			dev->speed = usb_full_speed;
+
+		ret = usb_devEnumerate(dev);
+		retries--;
+		if (ret != 0 && !hub_portDebounce(hub, port)) {
+			printf("usb: Enumeration failed. No retrying\n");
+			break;
+		}
+		else if (ret != 0) {
+			printf("usb: Enumeration failed retries left: %d\n", retries);
+			dev->hcd->ops->pipeDestroy(dev->hcd, dev->ctrlPipe);
+			if (dev->address != 0)
+				hcd_addrFree(hub->hcd, dev->address);
+			dev->address = 0;
+			dev->locationID = 0;
+		}
+	} while (ret != 0 && retries > 0);
+
+	if (ret != 0)
+		usb_devDisconnected(dev);
 }
 
 
