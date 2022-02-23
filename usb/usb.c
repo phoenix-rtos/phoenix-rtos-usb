@@ -125,7 +125,7 @@ static int usb_handleUrb(msg_t *msg, unsigned int port, unsigned long rid)
 	usb_transfer_t *t;
 
 	if ((drv = usb_drvFind(msg->pid)) == NULL) {
-		fprintf(stderr, "usb: driver pid %d does not exist!\n", drv->pid);
+		fprintf(stderr, "usb: driver pid %d does not exist!\n", msg->pid);
 		return -EINVAL;
 	}
 
