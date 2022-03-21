@@ -61,6 +61,9 @@ typedef struct usb_transfer {
 } usb_transfer_t;
 
 
+#define USB_LOG(fmt, ...) do { printf(fmt, ##__VA_ARGS__); } while (0);
+
+
 int usb_memInit(void);
 
 

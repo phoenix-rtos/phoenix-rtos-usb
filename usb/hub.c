@@ -142,20 +142,20 @@ static int hub_interruptInit(usb_dev_t *hub)
 	usb_transfer_t *t;
 
 	if ((t = calloc(1, sizeof(usb_transfer_t))) == NULL) {
-		fprintf(stderr, "hub: Out of memory!\n");
+		USB_LOG("hub: Out of memory!\n");
 		return -ENOMEM;
 	}
 
 	if ((t->buffer = usb_alloc(sizeof(uint32_t))) == NULL) {
 		free(t);
-		fprintf(stderr, "hub: Out of memory!\n");
+		USB_LOG("hub: Out of memory!\n");
 		return -ENOMEM;
 	}
 
 	if ((t->pipe = usb_pipeOpen(hub, 0, usb_dir_in, usb_transfer_interrupt)) == NULL) {
 		usb_free(t->buffer, sizeof(uint32_t));
 		free(t);
-		fprintf(stderr, "hub: Fail to open interrupt pipe!\n");
+		USB_LOG("hub: Fail to open interrupt pipe!\n");
 		return -ENOMEM;
 	}
 
@@ -256,7 +256,7 @@ static void hub_devConnected(usb_dev_t *hub, int port)
 	int retries = HUB_ENUM_RETRIES;
 
 	if ((dev = usb_devAlloc()) == NULL) {
-		fprintf(stderr, "hub: Not enough memory to allocate a new device!\n");
+		USB_LOG("hub: Not enough memory to allocate a new device!\n");
 		return;
 	}
 
@@ -266,7 +266,7 @@ static void hub_devConnected(usb_dev_t *hub, int port)
 
 	do {
 		if ((ret = hub_portReset(hub, port, &status)) < 0) {
-			fprintf(stderr, "hub: fail to reset port %d\n", port);
+			USB_LOG("hub: fail to reset port %d\n", port);
 			break;
 		}
 
@@ -403,12 +403,12 @@ int hub_conf(usb_dev_t *hub)
 	int i;
 
 	if (hub_setConf(hub, 1) < 0) {
-		fprintf(stderr, "hub: Fail to set configuration!\n");
+		USB_LOG("hub: Fail to set configuration!\n");
 		return -EINVAL;
 	}
 
 	if (hub_getDesc(hub, buf, sizeof(buf)) < 0) {
-		fprintf(stderr, "hub: Fail to get descriptor\n");
+		USB_LOG("hub: Fail to get descriptor\n");
 		return -EINVAL;
 	}
 
@@ -416,13 +416,13 @@ int hub_conf(usb_dev_t *hub)
 	desc = (usb_hub_desc_t *)buf;
 	hub->nports = min(USB_HUB_MAX_PORTS, desc->bNbrPorts);
 	if ((hub->devs = calloc(hub->nports, sizeof(usb_dev_t *))) == NULL) {
-		fprintf(stderr, "hub: Out of memory!\n");
+		USB_LOG("hub: Out of memory!\n");
 		return -ENOMEM;
 	}
 
 	for (i = 0; i < hub->nports; i++) {
 		if (hub_setPortPower(hub, i + 1) < 0) {
-			fprintf(stderr, "hub: Fail to set port %d power!\n", i + 1);
+			USB_LOG("hub: Fail to set port %d power!\n", i + 1);
 			free(hub->devs);
 			return -EINVAL;
 		}

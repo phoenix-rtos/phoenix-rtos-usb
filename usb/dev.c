@@ -212,7 +212,7 @@ static int usb_getConfiguration(usb_dev_t *dev)
 
 	/* Get first nine bytes to get to know configuration len */
 	if (usb_getDescriptor(dev, USB_DESC_CONFIG, 0, (char *)&pre, sizeof(pre)) < 0) {
-		fprintf(stderr, "usb: Fail to get configuration descriptor\n");
+		USB_LOG("usb: Fail to get configuration descriptor\n");
 		return -1;
 	}
 
@@ -222,7 +222,7 @@ static int usb_getConfiguration(usb_dev_t *dev)
 
 	/* TODO: Handle multiple configuration devices */
 	if (usb_getDescriptor(dev, USB_DESC_CONFIG, 0, (char *)conf, pre.wTotalLength) < 0) {
-		fprintf(stderr, "usb: Fail to get configuration descriptor\n");
+		USB_LOG("usb: Fail to get configuration descriptor\n");
 		free(conf);
 		return -1;
 	}
@@ -262,7 +262,7 @@ static int usb_getStringDesc(usb_dev_t *dev, char **buf, int index)
 	size_t asciisz;
 
 	if (usb_getDescriptor(dev, USB_DESC_STRING, index, (char *)&desc, sizeof(desc)) < 0) {
-		fprintf(stderr, "usb: Fail to get string descriptor\n");
+		USB_LOG("usb: Fail to get string descriptor\n");
 		return -1;
 	}
 	asciisz = (desc.bLength - 2) / 2;
@@ -284,7 +284,7 @@ static int usb_getAllStringDescs(usb_dev_t *dev)
 	int i;
 
 	if (usb_getDescriptor(dev, USB_DESC_STRING, 0, (char *)&desc, sizeof(desc)) < 0) {
-		fprintf(stderr, "usb: Fail to get configuration descriptor\n");
+		USB_LOG("usb: Fail to get configuration descriptor\n");
 		return -1;
 	}
 
@@ -327,12 +327,12 @@ int usb_devEnumerate(usb_dev_t *dev)
 	int addr;
 
 	if (usb_genLocationID(dev) < 0) {
-		fprintf(stderr, "usb: Fail to generate location ID\n");
+		USB_LOG("usb: Fail to generate location ID\n");
 		return -1;
 	}
 
 	if (usb_getDevDesc(dev) < 0) {
-		fprintf(stderr, "usb: Fail to get device descriptor\n");
+		USB_LOG("usb: Fail to get device descriptor\n");
 		return -1;
 	}
 
@@ -340,34 +340,34 @@ int usb_devEnumerate(usb_dev_t *dev)
 	dev->ctrlPipe->maxPacketLen = dev->desc.bMaxPacketSize0;
 
 	if ((addr = hcd_addrAlloc(dev->hcd)) < 0) {
-		fprintf(stderr, "usb: Fail to add device to hcd\n");
+		USB_LOG("usb: Fail to add device to hcd\n");
 		return -1;
 	}
 
 	if (usb_setAddress(dev, addr) < 0) {
-		fprintf(stderr, "usb: Fail to set device address\n");
+		USB_LOG("usb: Fail to set device address\n");
 		return -1;
 	}
 
 	if (usb_getDevDesc(dev) < 0) {
-		fprintf(stderr, "usb: Fail to get device descriptor\n");
+		USB_LOG("usb: Fail to get device descriptor\n");
 		return -1;
 	}
 
 	if (usb_getConfiguration(dev) < 0) {
-		fprintf(stderr, "usb: Fail to get configuration descriptor\n");
+		USB_LOG("usb: Fail to get configuration descriptor\n");
 		return -1;
 	}
 
 	if (usb_getAllStringDescs(dev) < 0) {
-		fprintf(stderr, "usb: Fail to get string descriptors\n");
+		USB_LOG("usb: Fail to get string descriptors\n");
 		return -1;
 	}
 
 	if (!usb_isRoothub(dev))
 		usb_devSetChild(dev->hub, dev->port, dev);
 
-	fprintf(stderr, "usb: New device addr: %d locationID: %08x %s, %s\n", dev->address, dev->locationID,
+	USB_LOG("usb: New device addr: %d locationID: %08x %s, %s\n", dev->address, dev->locationID,
 		dev->manufacturer, dev->product);
 
 	if (dev->desc.bDeviceClass == USB_CLASS_HUB) {
@@ -375,7 +375,7 @@ int usb_devEnumerate(usb_dev_t *dev)
 			return -1;
 	}
 	else if (usb_drvBind(dev) != 0) {
-		fprintf(stderr, "usb: Fail to match drivers for device\n");
+		USB_LOG("usb: Fail to match drivers for device\n");
 		/* TODO: make device orphaned */
 	}
 
@@ -447,20 +447,20 @@ int usb_isRoothub(usb_dev_t *dev)
 int usb_devInit(void)
 {
 	if (mutexCreate(&usbdev_common.lock) != 0) {
-		fprintf(stderr, "usbdev: Can't create mutex!\n");
+		USB_LOG("usbdev: Can't create mutex!\n");
 		return -ENOMEM;
 	}
 
 	if (condCreate(&usbdev_common.cond) != 0) {
 		resourceDestroy(usbdev_common.lock);
-		fprintf(stderr, "usbdev: Can't create cond!\n");
+		USB_LOG("usbdev: Can't create cond!\n");
 		return -ENOMEM;
 	}
 
 	if ((usbdev_common.setupBuf = usb_alloc(USBDEV_BUF_SIZE)) == NULL) {
 		resourceDestroy(usbdev_common.lock);
 		resourceDestroy(usbdev_common.cond);
-		fprintf(stderr, "usbdev: Fail to allocate buffer!\n");
+		USB_LOG("usbdev: Fail to allocate buffer!\n");
 		return -ENOMEM;
 	}
 
