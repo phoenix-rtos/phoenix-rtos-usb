@@ -92,12 +92,12 @@ static usb_pipe_t *_usb_drvPipeOpen(usb_drv_t *drv, hcd_t *hcd, int locationID, 
 	int i;
 
 	if ((dev = usb_devFind(hcd->roothub, locationID)) == NULL) {
-		fprintf(stderr, "usb: Fail to find device\n");
+		USB_LOG("usb: Fail to find device\n");
 		return NULL;
 	}
 
 	if (dev->nifs < ifaceID) {
-		fprintf(stderr, "usb: Fail to find iface\n");
+		USB_LOG("usb: Fail to find iface\n");
 		return NULL;
 	}
 
@@ -342,7 +342,7 @@ void usb_drvAdd(usb_drv_t *drv)
 int usb_drvInit(void)
 {
 	if (mutexCreate(&usbdrv_common.lock) != 0) {
-		fprintf(stderr, "usbdrv: Can't create mutex!\n");
+		USB_LOG("usbdrv: Can't create mutex!\n");
 		return -ENOMEM;
 	}
 

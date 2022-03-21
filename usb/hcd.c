@@ -170,23 +170,23 @@ hcd_t *hcd_init(void)
 
 	for (i = 0; i < nhcd; i++) {
 		if ((ops = hcd_lookup(info[i].type)) == NULL) {
-			fprintf(stderr, "usb-hcd: No ops found for hcd type %s\n", info[i].type);
+			USB_LOG("usb-hcd: No ops found for hcd type %s\n", info[i].type);
 			continue;
 		}
 
 		if ((hcd = hcd_create(ops, &info[i], num++)) == NULL) {
-			fprintf(stderr, "usb-hcd: Not enough memory to allocate hcd type: %s\n", info[i].type);
+			USB_LOG("usb-hcd: Not enough memory to allocate hcd type: %s\n", info[i].type);
 			return res;
 		}
 
 		if (hcd->ops->init(hcd) != 0) {
-			fprintf(stderr, "usb-hcd: Fail to initialize hcd type: %s\n", info[i].type);
+			USB_LOG("usb-hcd: Fail to initialize hcd type: %s\n", info[i].type);
 			hcd_free(hcd);
 			continue;
 		}
 
 		if (hcd_roothubInit(hcd) != 0) {
-			fprintf(stderr, "usb-hcd: Fail to initialize roothub: %s\n", info[i].type);
+			USB_LOG("usb-hcd: Fail to initialize roothub: %s\n", info[i].type);
 			hcd_free(hcd);
 			continue;
 		}

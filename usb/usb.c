@@ -125,7 +125,7 @@ static int usb_handleUrb(msg_t *msg, unsigned int port, unsigned long rid)
 	usb_transfer_t *t;
 
 	if ((drv = usb_drvFind(msg->pid)) == NULL) {
-		fprintf(stderr, "usb: driver pid %d does not exist!\n", msg->pid);
+		USB_LOG("usb: driver pid %d does not exist!\n", msg->pid);
 		return -EINVAL;
 	}
 
@@ -205,12 +205,12 @@ static int usb_handleOpen(usb_open_t *o, msg_t *msg)
 	hcd_t *hcd;
 
 	if ((drv = usb_drvFind(msg->pid)) == NULL) {
-		fprintf(stderr, "usb: Fail to find driver pid: %d\n", msg->pid);
+		USB_LOG("usb: Fail to find driver pid: %d\n", msg->pid);
 		return -EINVAL;
 	}
 
 	if ((hcd = hcd_find(usb_common.hcds, o->locationID)) == NULL) {
-		fprintf(stderr, "usb: Fail to find dev: %d\n", o->dev);
+		USB_LOG("usb: Fail to find dev: %d\n", o->dev);
 		return -EINVAL;
 	}
 
@@ -288,13 +288,13 @@ static void usb_msgthr(void *arg)
 						break;
 					default:
 						msg.o.io.err = -EINVAL;
-						fprintf(stderr, "usb: unsupported usb_msg type\n");
+						USB_LOG("usb: unsupported usb_msg type\n");
 						break;
 				}
 				break;
 			default:
 				msg.o.io.err = -EINVAL;
-				fprintf(stderr, "usb: unsupported msg type\n");
+				USB_LOG("usb: unsupported msg type\n");
 		}
 		mutexUnlock(usb_common.lock);
 
@@ -309,42 +309,42 @@ int main(int argc, char *argv[])
 	oid_t oid;
 
 	if (mutexCreate(&usb_common.lock) != 0) {
-		fprintf(stderr, "usb: Can't create mutex!\n");
+		USB_LOG("usb: Can't create mutex!\n");
 		return 1;
 	}
 
 	if (mutexCreate(&usb_common.transferLock) != 0) {
-		fprintf(stderr, "usb: Can't create mutex!\n");
+		USB_LOG("usb: Can't create mutex!\n");
 		return 1;
 	}
 
 	if (condCreate(&usb_common.finishedCond) != 0) {
-		fprintf(stderr, "usb: Can't create mutex!\n");
+		USB_LOG("usb: Can't create mutex!\n");
 		return 1;
 	}
 
 	if (usb_memInit() != 0) {
-		fprintf(stderr, "usb: Can't initiate memory management!\n");
+		USB_LOG("usb: Can't initiate memory management!\n");
 		return 1;
 	}
 
 	if (usb_devInit() != 0) {
-		fprintf(stderr, "usb: Fail to init devices!\n");
+		USB_LOG("usb: Fail to init devices!\n");
 		return 1;
 	}
 
 	if (hub_init() != 0) {
-		fprintf(stderr, "usb: Fail to init hub driver!\n");
+		USB_LOG("usb: Fail to init hub driver!\n");
 		return 1;
 	}
 
 	if ((usb_common.hcds = hcd_init()) == NULL) {
-		fprintf(stderr, "usb: Fail to init hcds!\n");
+		USB_LOG("usb: Fail to init hcds!\n");
 		return 1;
 	}
 
 	if (portCreate(&usb_common.port) != 0) {
-		fprintf(stderr, "usb: Can't create port!\n");
+		USB_LOG("usb: Can't create port!\n");
 		return 1;
 	}
 
@@ -352,7 +352,7 @@ int main(int argc, char *argv[])
 	oid.id = 0;
 
 	if (create_dev(&oid, "/dev/usb") != 0) {
-		fprintf(stderr, "usb: Can't create dev!\n");
+		USB_LOG("usb: Can't create dev!\n");
 		return 1;
 	}
 
