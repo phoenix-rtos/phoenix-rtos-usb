@@ -238,7 +238,7 @@ void *usb_alloc(size_t size)
 	size = (size + (USB_CHUNK_SIZE - 1)) & ~(USB_CHUNK_SIZE - 1);
 	/* Don't manage larger buffers */
 	if (size > USB_BUF_SIZE - USB_CHUNK_SIZE)
-		return usb_allocUncached(USB_BUF_SIZE);
+		return usb_allocAligned(size, USB_BUF_SIZE);
 
 	mutexLock(usb_mem_common.lock);
 	ret = usb_allocFrom(usb_mem_common.buffer, size);
