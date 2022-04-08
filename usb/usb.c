@@ -34,9 +34,15 @@
 #include "hub.h"
 
 
+#define N_STATUSTHRS   2
+#define STATUSTHR_PRIO 3
+
+#define MSGTHR_PRIO    3
+
+
 static struct {
-	char stack[4096] __attribute__((aligned(8)));
-	handle_t lock, transferLock;
+	char stack[N_STATUSTHRS][2048] __attribute__((aligned(8)));
+	handle_t transferLock;
 	handle_t finishedCond;
 	hcd_t *hcds;
 	usb_drv_t *drvs;
@@ -265,7 +271,6 @@ static void usb_msgthr(void *arg)
 		if (msgRecv(port, &msg, &rid) < 0)
 			continue;
 		resp = 1;
-		mutexLock(usb_common.lock);
 		switch (msg.type) {
 			case mtRead:
 				msg.o.io.err = usb_devsList(msg.o.data, msg.o.size);
@@ -296,7 +301,6 @@ static void usb_msgthr(void *arg)
 				msg.o.io.err = -EINVAL;
 				USB_LOG("usb: unsupported msg type\n");
 		}
-		mutexUnlock(usb_common.lock);
 
 		if (resp)
 			msgRespond(port, &msg, rid);
@@ -307,11 +311,7 @@ static void usb_msgthr(void *arg)
 int main(int argc, char *argv[])
 {
 	oid_t oid;
-
-	if (mutexCreate(&usb_common.lock) != 0) {
-		USB_LOG("usb: Can't create mutex!\n");
-		return 1;
-	}
+	int i;
 
 	if (mutexCreate(&usb_common.transferLock) != 0) {
 		USB_LOG("usb: Can't create mutex!\n");
@@ -356,10 +356,14 @@ int main(int argc, char *argv[])
 		return 1;
 	}
 
-	if (beginthread(usb_statusthr, 4, usb_common.stack, sizeof(usb_common.stack), NULL) != 0) {
-		fprintf(stderr, "usb: Fail to init hub driver!\n");
-		return 1;
+	for (i = 0; i < N_STATUSTHRS; i++) {
+		if (beginthread(usb_statusthr, STATUSTHR_PRIO, &usb_common.stack[i], sizeof(usb_common.stack[i]), NULL) != 0) {
+			USB_LOG("usb: Fail to init hub driver!\n");
+			return 1;
+		}
 	}
+
+	priority(MSGTHR_PRIO);
 
 	usb_msgthr((void *)usb_common.port);
 
