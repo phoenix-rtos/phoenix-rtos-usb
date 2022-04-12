@@ -56,6 +56,8 @@ typedef struct {
 	int size;
 	usb_setup_packet_t setup;
 	usb_dir_t dir;
+	int type;
+	int sync;
 } usb_urb_t;
 
 
@@ -67,11 +69,6 @@ typedef struct {
 	usb_transfer_type_t type;
 	usb_dir_t dir;
 } usb_open_t;
-
-
-typedef struct {
-	int device_id;
-} usb_reset_t;
 
 
 typedef struct {
@@ -94,21 +91,41 @@ typedef struct {
 
 
 typedef struct {
+	int pipeid;
+	int urbid;
+	size_t size;
+	enum {
+		urbcmd_submit,
+		urbcmd_cancel,
+		urbcmd_free } cmd;
+} usb_urbcmd_t;
+
+
+typedef struct {
+	int pipeid;
+	int urbid;
+	size_t transferred;
+	int err;
+} usb_completion_t;
+
+
+typedef struct {
 	enum { usb_msg_connect,
 		usb_msg_insertion,
 		usb_msg_deletion,
 		usb_msg_urb,
 		usb_msg_open,
-		usb_msg_reset,
-		usb_msg_info } type;
+		usb_msg_urbcmd,
+		usb_msg_completion } type;
 
 	union {
 		usb_connect_t connect;
 		usb_urb_t urb;
+		usb_urbcmd_t urbcmd;
 		usb_open_t open;
-		usb_reset_t reset;
 		usb_devinfo_t insertion;
 		usb_deletion_t deletion;
+		usb_completion_t completion;
 	};
 } usb_msg_t;
 
@@ -142,7 +159,16 @@ int usb_transferControl(unsigned pipe, usb_setup_packet_t *setup, void *data, si
 int usb_transferBulk(unsigned pipe, void *data, size_t size, usb_dir_t dir);
 
 
+int usb_transferAsync(unsigned pipe, unsigned urbid, size_t size);
+
+
 int usb_setConfiguration(unsigned pipe, int conf);
+
+
+int usb_urbAlloc(unsigned pipe, void *data, usb_dir_t dir, size_t size, int type);
+
+
+int usb_urbFree(unsigned pipe, unsigned urb);
 
 
 int usb_clearFeatureHalt(unsigned pipe, int ep);

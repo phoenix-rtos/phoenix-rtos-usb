@@ -123,7 +123,9 @@ int usb_transferControl(unsigned pipe, usb_setup_packet_t *setup, void *data, si
 		.pipe = pipe,
 		.setup = *setup,
 		.dir = dir,
-		.size = size
+		.size = size,
+		.type = usb_transfer_control,
+		.sync = 1
 	};
 
 	return usb_urbSubmitSync(&urb, data);
@@ -135,7 +137,9 @@ int usb_transferBulk(unsigned pipe, void *data, size_t size, usb_dir_t dir)
 	usb_urb_t urb = {
 		.pipe = pipe,
 		.dir = dir,
-		.size = size
+		.size = size,
+		.type = usb_transfer_bulk,
+		.sync = 1
 	};
 
 	return usb_urbSubmitSync(&urb, data);
@@ -167,6 +171,71 @@ int usb_clearFeatureHalt(unsigned pipe, int ep)
 	};
 
 	return usb_transferControl(pipe, &setup, NULL, 0, usb_dir_out);
+}
+
+
+int usb_urbAlloc(unsigned pipe, void *data, usb_dir_t dir, size_t size, int type)
+{
+	msg_t msg = { 0 };
+	usb_msg_t *umsg = (usb_msg_t *)msg.i.raw;
+	int ret;
+	usb_urb_t *urb = &umsg->urb;
+
+	urb->pipe = pipe;
+	urb->type = type;
+	urb->dir = dir;
+	urb->size = size;
+	urb->sync = 0;
+
+	msg.type = mtDevCtl;
+	umsg->type = usb_msg_urb;
+
+	if ((ret = msgSend(usbdrv_common.port, &msg)) < 0)
+		return ret;
+
+	/* URB id */
+	return *(int *)msg.o.raw;
+}
+
+
+int usb_transferAsync(unsigned pipe, unsigned urbid, size_t size)
+{
+	msg_t msg = { 0 };
+	usb_msg_t *umsg = (usb_msg_t *)msg.i.raw;
+	int ret;
+	usb_urbcmd_t *urbcmd = &umsg->urbcmd;
+
+	urbcmd->pipeid = pipe;
+	urbcmd->size = size;
+	urbcmd->urbid = urbid;
+	urbcmd->cmd = urbcmd_submit;
+
+	msg.type = mtDevCtl;
+	umsg->type = usb_msg_urbcmd;
+	if ((ret = msgSend(usbdrv_common.port, &msg)) < 0)
+		return ret;
+
+	return 0;
+}
+
+
+int usb_urbFree(unsigned pipe, unsigned urb)
+{
+	msg_t msg = { 0 };
+	usb_msg_t *umsg = (usb_msg_t *)msg.i.raw;
+	int ret;
+	usb_urbcmd_t *urbcmd = &umsg->urbcmd;
+
+	urbcmd->pipeid = pipe;
+	urbcmd->urbid = urb;
+	urbcmd->cmd = urbcmd_free;
+
+	msg.type = mtDevCtl;
+	umsg->type = usb_msg_urbcmd;
+	if ((ret = msgSend(usbdrv_common.port, &msg)) < 0)
+		return ret;
+
+	return 0;
 }
 
 

@@ -3,7 +3,7 @@
  *
  * USB Host Driver
  *
- * Copyright 2021 Phoenix Systems
+ * Copyright 2021, 2022 Phoenix Systems
  * Author: Maciej Purski
  *
  * This file is part of Phoenix-RTOS.
@@ -32,29 +32,54 @@ struct {
 } usbdrv_common;
 
 
-void usb_drvPipeFree(usb_drv_t *drv, usb_pipe_t *pipe)
-{
-	mutexLock(usbdrv_common.lock);
-	if (drv != NULL)
-		idtree_remove(&drv->pipes, &pipe->linkage);
 
-	pipe->dev->hcd->ops->pipeDestroy(pipe->dev->hcd, pipe);
-	free(pipe);
-	mutexUnlock(usbdrv_common.lock);
-}
-
-
-static usb_pipe_t *usb_drvPipeFind(usb_drv_t *drv, int pipe)
+usb_pipe_t *usb_pipeFind(usb_drv_t *drv, int pipeid)
 {
 	usb_pipe_t *res;
 
-	res = lib_treeof(usb_pipe_t, linkage, idtree_find(&drv->pipes, pipe));
+	mutexLock(usbdrv_common.lock);
+	res = lib_treeof(usb_pipe_t, linkage, idtree_find(&drv->pipes, pipeid));
+	mutexUnlock(usbdrv_common.lock);
 
 	return res;
 }
 
 
-static int usb_pipeAdd(usb_drv_t *drv, usb_pipe_t *pipe)
+static usb_pipe_t *_usb_pipeFind(usb_drv_t *drv, int pipeid)
+{
+	return lib_treeof(usb_pipe_t, linkage, idtree_find(&drv->pipes, pipeid));
+}
+
+
+static usb_transfer_t *_usb_transferFind(usb_drv_t *drv, int id)
+{
+	usb_transfer_t *t;
+
+	t = lib_treeof(usb_transfer_t, linkage, idtree_find(&drv->urbs, id));
+	if (t != NULL)
+		t->refcnt++;
+
+	return t;
+}
+
+
+static void _usb_transferPut(usb_transfer_t *t)
+{
+	t->refcnt--;
+	if (t->refcnt == 0)
+		usb_transferFree(t);
+}
+
+
+void usb_transferPut(usb_transfer_t *t)
+{
+	mutexLock(usbdrv_common.lock);
+	_usb_transferPut(t);
+	mutexUnlock(usbdrv_common.lock);
+}
+
+
+static int _usb_pipeAdd(usb_drv_t *drv, usb_pipe_t *pipe)
 {
 	if (idtree_alloc(&drv->pipes, &pipe->linkage) < 0)
 		return -1;
@@ -125,7 +150,7 @@ static usb_pipe_t *_usb_drvPipeOpen(usb_drv_t *drv, hcd_t *hcd, int locationID, 
 	}
 
 	if (pipe != NULL && drv != NULL) {
-		if (usb_pipeAdd(drv, pipe) != 0) {
+		if (_usb_pipeAdd(drv, pipe) != 0) {
 			free(pipe);
 			return NULL;
 		}
@@ -161,22 +186,31 @@ int usb_drvPipeOpen(usb_drv_t *drv, hcd_t *hcd, int locationID, int iface, int d
 }
 
 
-int usb_drvTransfer(usb_drv_t *drv, usb_transfer_t *t, int pipeId)
+static int _usb_drvTransfer(usb_drv_t *drv, usb_transfer_t *t)
 {
 	usb_pipe_t *pipe;
-	int ret = -1;
+
+	pipe = _usb_pipeFind(drv, t->pipeid);
+	if (pipe == NULL)
+		return -EINVAL;
+
+	t->pipe = pipe;
+
+	return usb_transferSubmit(t, NULL);
+}
+
+
+int usb_drvTransfer(usb_drv_t *drv, usb_transfer_t *t, int pipeId)
+{
+	int ret;
 
 	mutexLock(usbdrv_common.lock);
-	pipe = usb_drvPipeFind(drv, pipeId);
-	if (pipe != NULL) {
-		t->pipe = pipe;
-		t->type = pipe->type;
-		ret = usb_transferSubmit(t, 0);
-	}
+	ret = _usb_drvTransfer(drv, t);
 	mutexUnlock(usbdrv_common.lock);
 
 	return ret;
 }
+
 
 
 static int usb_drvcmp(usb_device_desc_t *dev, usb_interface_desc_t *iface, usb_device_id_t *filter)
@@ -252,6 +286,53 @@ static usb_drv_t *usb_drvMatchIface(usb_dev_t *dev, usb_iface_t *iface)
 }
 
 
+static int _usb_urbCancel(usb_transfer_t *t, usb_drv_t *drv)
+{
+	hcd_t *hcd = t->pipe->dev->hcd;
+
+	hcd->ops->transferDequeue(hcd, t);
+
+	return 0;
+}
+
+
+static int _usb_urbFree(usb_transfer_t *t, usb_drv_t *drv)
+{
+	if (t->state == urb_ongoing)
+		_usb_urbCancel(t, drv);
+
+	/* Remove from the drv's urbs tree */
+	idtree_remove(&drv->urbs, &t->linkage);
+	_usb_transferPut(t);
+
+	return 0;
+}
+
+
+static void _usb_pipeFree(usb_drv_t *drv, usb_pipe_t *pipe)
+{
+	rbnode_t *n, *nn;
+	usb_transfer_t *t;
+
+	if (drv != NULL) {
+		/* Free all preallocated urbs */
+		n = lib_rbMinimum(drv->urbs.root);
+		while (n != NULL) {
+			t = lib_treeof(usb_transfer_t, linkage, n);
+			nn = lib_rbNext(n);
+			if (t->pipeid == pipe->linkage.id)
+				_usb_urbFree(t, drv);
+			n = nn;
+		}
+
+		idtree_remove(&drv->pipes, &pipe->linkage);
+	}
+
+	pipe->dev->hcd->ops->pipeDestroy(pipe->dev->hcd, pipe);
+	free(pipe);
+}
+
+
 int usb_drvUnbind(usb_drv_t *drv, usb_dev_t *dev, int iface)
 {
 	msg_t msg = { 0 };
@@ -260,13 +341,11 @@ int usb_drvUnbind(usb_drv_t *drv, usb_dev_t *dev, int iface)
 	rbnode_t *n;
 
 	mutexLock(usbdrv_common.lock);
+
 	while ((n = lib_rbMinimum(drv->pipes.root)) != NULL) {
 		pipe = lib_treeof(usb_pipe_t, linkage, n);
-		if (pipe->dev == dev) {
-			lib_rbRemove(&drv->pipes, n);
-			dev->hcd->ops->pipeDestroy(dev->hcd, pipe);
-			free(pipe);
-		}
+		if (pipe->dev == dev)
+			_usb_pipeFree(drv, pipe);
 	}
 
 	mutexUnlock(usbdrv_common.lock);
@@ -308,11 +387,10 @@ int usb_drvBind(usb_dev_t *dev)
 }
 
 
-usb_drv_t *usb_drvFind(int pid)
+usb_drv_t *_usb_drvFind(pid_t pid)
 {
 	usb_drv_t *drv, *res = NULL;
 
-	mutexLock(usbdrv_common.lock);
 	drv = usbdrv_common.drvs;
 	if (drv != NULL) {
 		do {
@@ -324,9 +402,20 @@ usb_drv_t *usb_drvFind(int pid)
 			drv = drv->next;
 		} while (drv != usbdrv_common.drvs);
 	}
-	mutexUnlock(usbdrv_common.lock);
 
 	return res;
+}
+
+
+usb_drv_t *usb_drvFind(int pid)
+{
+	usb_drv_t *drv;
+
+	mutexLock(usbdrv_common.lock);
+	drv = _usb_drvFind(pid);
+	mutexUnlock(usbdrv_common.lock);
+
+	return drv;
 }
 
 
@@ -334,7 +423,193 @@ void usb_drvAdd(usb_drv_t *drv)
 {
 	mutexLock(usbdrv_common.lock);
 	idtree_init(&drv->pipes);
+	idtree_init(&drv->urbs);
 	LIST_ADD(&usbdrv_common.drvs, drv);
+	mutexUnlock(usbdrv_common.lock);
+}
+
+
+
+static usb_transfer_t *usb_transferAlloc(int sync, int type, usb_setup_packet_t *setup, usb_dir_t dir, size_t size, char *buf)
+{
+	usb_transfer_t *t;
+
+	if ((t = calloc(1, sizeof(usb_transfer_t))) == NULL)
+		return NULL;
+
+	t->async = !sync;
+	t->direction = dir;
+	t->transferred = 0;
+	t->size = size;
+	t->state = urb_idle;
+	t->type = type;
+
+	if (size > 0) {
+		if ((t->buffer = usb_alloc(t->size)) == NULL) {
+			free(t);
+			return NULL;
+		}
+	}
+
+	if (type == usb_transfer_control) {
+		t->setup = usb_alloc(sizeof(usb_setup_packet_t));
+		memcpy(t->setup, setup, sizeof(usb_setup_packet_t));
+	}
+
+	if (dir == usb_dir_out && size > 0)
+		memcpy(t->buffer, buf, t->size);
+	return t;
+}
+
+
+void usb_transferFree(usb_transfer_t *t)
+{
+	usb_free(t->buffer, t->size);
+	usb_free(t->setup, sizeof(usb_setup_packet_t));
+	free(t);
+}
+
+
+static int _usb_urbSubmit(usb_transfer_t *t, usb_pipe_t *pipe)
+{
+	if (t->state != urb_idle)
+		return -EBUSY;
+
+	t->state = urb_ongoing;
+	t->pipe = pipe;
+	t->pipeid = pipe->linkage.id;
+
+	if (usb_transferSubmit(t, NULL) < 0) {
+		t->state = urb_idle;
+		return -EIO;
+	}
+
+	return 1;
+}
+
+
+static int _usb_handleUrbcmd(msg_t *msg)
+{
+	usb_msg_t *umsg = (usb_msg_t *)msg->i.raw;
+	usb_urbcmd_t *urbcmd = &umsg->urbcmd;
+	usb_transfer_t *t;
+	usb_pipe_t *pipe;
+	usb_drv_t *drv;
+	int ret;
+
+	drv = _usb_drvFind(msg->pid);
+	if (drv == NULL)
+		return -EINVAL;
+
+	pipe = _usb_pipeFind(drv, urbcmd->pipeid);
+	if (pipe == NULL)
+		return -EINVAL;
+
+	t = _usb_transferFind(drv, urbcmd->urbid);
+	if (t == NULL)
+		return -EINVAL;
+
+	switch (urbcmd->cmd) {
+		case urbcmd_submit:
+			ret = _usb_urbSubmit(t, pipe);
+			break;
+		case urbcmd_cancel:
+			ret = _usb_urbCancel(t, drv);
+			break;
+		case urbcmd_free:
+			ret = _usb_urbFree(t, drv);
+			break;
+		default:
+			ret = -EINVAL;
+	}
+
+	if (ret <= 0) {
+		_usb_transferPut(t);
+		return ret;
+	}
+	else {
+		/* Transfer submitted, transfer reference handed to hcd */
+		return 0;
+	}
+}
+
+
+int usb_handleUrbcmd(msg_t *msg)
+{
+	int ret;
+
+	mutexLock(usbdrv_common.lock);
+	ret = _usb_handleUrbcmd(msg);
+	mutexUnlock(usbdrv_common.lock);
+
+	return ret;
+}
+
+
+static int _usb_handleUrb(msg_t *msg, unsigned int port, unsigned long rid)
+{
+	usb_msg_t *umsg = (usb_msg_t *)msg->i.raw;
+	usb_urb_t *urb = &umsg->urb;
+	usb_drv_t *drv;
+	usb_transfer_t *t;
+
+	if ((drv = _usb_drvFind(msg->pid)) == NULL) {
+		USB_LOG("usb: driver pid %d does not exist!\n", msg->pid);
+		return -EINVAL;
+	}
+
+	t = usb_transferAlloc(urb->sync, urb->type, &urb->setup, urb->dir, urb->size, msg->i.data);
+	if (t == NULL)
+		return -ENOMEM;
+
+	t->port = drv->port;
+	t->pipeid = urb->pipe;
+
+	/* For async urbs only allocate resources. The transfer would be executed,
+	 * upon receiving usb_submit_t msg later */
+	if (!urb->sync) {
+		if (idtree_alloc(&drv->urbs, &t->linkage) < 0) {
+			usb_transferFree(t);
+			return -ENOMEM;
+		}
+
+		t->refcnt = 1;
+		*(int *)msg->o.raw = t->linkage.id;
+	}
+	else {
+		t->rid = rid;
+		t->pid = msg->pid;
+
+		if (_usb_drvTransfer(drv, t) < 0) {
+			usb_transferFree(t);
+			return -EINVAL;
+		}
+	}
+
+	/* For async urbs, respond immediately and send usb_completion msg later.
+	 * For sync ones, block the sender, and respond later */
+	return urb->sync;
+}
+
+
+int usb_handleUrb(msg_t *msg, unsigned int port, unsigned long rid)
+{
+	int ret;
+
+	mutexLock(usbdrv_common.lock);
+	ret = _usb_handleUrb(msg, port, rid);
+	mutexUnlock(usbdrv_common.lock);
+
+	return ret;
+}
+
+
+void usb_drvPipeFree(usb_drv_t *drv, usb_pipe_t *pipe)
+{
+	mutexLock(usbdrv_common.lock);
+
+	_usb_pipeFree(drv, pipe);
+
 	mutexUnlock(usbdrv_common.lock);
 }
 
