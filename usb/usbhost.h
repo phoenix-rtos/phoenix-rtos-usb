@@ -20,6 +20,8 @@
 #include <usb.h>
 
 
+enum { urb_idle, urb_completed, urb_ongoing };
+
 typedef struct {
 	idnode_t linkage;
 	struct _usb_drv *drv;
@@ -35,27 +37,30 @@ typedef struct {
 } usb_pipe_t;
 
 
+/* Used to handle both internal and external transfers */
 typedef struct usb_transfer {
 	struct usb_transfer *next, *prev;
 	usb_pipe_t *pipe;
 	usb_setup_packet_t *setup;
-	handle_t *cond;
 
 	unsigned async;
-	unsigned id;
 	volatile int finished;
 	volatile int error;
-	volatile int aborted;
 
 	char *buffer;
 	size_t size;
 	size_t transferred;
 	int type;
 	int direction;
+	int pipeid;
 
+	/* Used only for URBs handling */
+	idnode_t linkage;
+	int state;
+	int refcnt;
 	unsigned long rid;
-	msg_t *msg;
 	unsigned int port;
+	pid_t pid;
 
 	void *hcdpriv;
 } usb_transfer_t;
@@ -88,7 +93,12 @@ void usb_transferFinished(usb_transfer_t *t, int status);
 int usb_transferCheck(usb_transfer_t *t);
 
 
-int usb_transferSubmit(usb_transfer_t *t, int sync);
+int usb_transferSubmit(usb_transfer_t *t, handle_t *cond);
 
+
+void usb_transferFree(usb_transfer_t *t);
+
+
+void usb_transferPut(usb_transfer_t *t);
 
 #endif

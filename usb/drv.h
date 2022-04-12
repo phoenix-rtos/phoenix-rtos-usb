@@ -21,11 +21,12 @@
 
 typedef struct _usb_drv {
 	struct _usb_drv *next, *prev;
-	unsigned pid;
+	pid_t pid;
 	unsigned port;
 	unsigned nfilters;
 	usb_device_id_t *filters;
 	idtree_t pipes;
+	idtree_t urbs;
 } usb_drv_t;
 
 
@@ -55,5 +56,16 @@ void usb_drvPipeFree(usb_drv_t *drv, usb_pipe_t *pipe);
 
 int usb_drvTransfer(usb_drv_t *drv, usb_transfer_t *t, int pipeId);
 
+
+int usb_urbAllocHandle(msg_t *msg, unsigned int port, unsigned long rid);
+
+
+int usb_drvTransferAsync(usb_drv_t *drv, int urbid, int pipeid);
+
+
+int usb_handleUrbcmd(msg_t *msg);
+
+
+int usb_handleUrb(msg_t *msg, unsigned int port, unsigned long rid);
 
 #endif /* _USB_DRV_H_ */

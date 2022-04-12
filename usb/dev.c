@@ -47,7 +47,6 @@ int usb_devCtrl(usb_dev_t *dev, usb_dir_t dir, usb_setup_packet_t *setup, char *
 		.setup = (usb_setup_packet_t *)usbdev_common.setupBuf,
 		.buffer = usbdev_common.ctrlBuf,
 		.size = len,
-		.cond = &usbdev_common.cond
 	};
 	int ret;
 
@@ -58,7 +57,7 @@ int usb_devCtrl(usb_dev_t *dev, usb_dir_t dir, usb_setup_packet_t *setup, char *
 	if (dir == usb_dir_out && len > 0)
 		memcpy(usbdev_common.ctrlBuf, buf, len);
 
-	if ((ret = usb_transferSubmit(&t, 1)) != 0) {
+	if ((ret = usb_transferSubmit(&t, &usbdev_common.cond)) != 0) {
 		mutexUnlock(usbdev_common.lock);
 		return ret;
 	}
@@ -435,6 +434,12 @@ void usb_devDisconnected(usb_dev_t *dev)
 	usb_devSetChild(dev->hub, dev->port, NULL);
 	usb_devUnbind(dev);
 	usb_devDestroy(dev);
+}
+
+
+void usb_devSignal(void)
+{
+	condSignal(usbdev_common.cond);
 }
 
 

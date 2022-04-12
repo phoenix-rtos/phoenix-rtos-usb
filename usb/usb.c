@@ -64,7 +64,7 @@ int usb_transferCheck(usb_transfer_t *t)
 }
 
 
-int usb_transferSubmit(usb_transfer_t *t, int sync)
+int usb_transferSubmit(usb_transfer_t *t, handle_t *cond)
 {
 	hcd_t *hcd = t->pipe->dev->hcd;
 	int ret = 0;
@@ -80,10 +80,12 @@ int usb_transferSubmit(usb_transfer_t *t, int sync)
 	if ((ret = hcd->ops->transferEnqueue(hcd, t)) != 0)
 		return ret;
 
-	if (sync) {
+	/* Internal blocking transfer */
+	if (cond != NULL) {
 		mutexLock(usb_common.transferLock);
+
 		while (!t->finished)
-			condWait(*t->cond, usb_common.transferLock, 0);
+			condWait(*cond, usb_common.transferLock, 0);
 		mutexUnlock(usb_common.transferLock);
 	}
 
@@ -106,14 +108,20 @@ void usb_transferFinished(usb_transfer_t *t, int status)
 		t->error = -status;
 	}
 
-	/* URB Transfer */
-	if (t->msg != NULL)
+	/* Internal transfer */
+	if (t->port == 0) {
+		if (t->type == usb_transfer_interrupt && t->transferred > 0)
+			hub_notify(t->pipe->dev);
+		else
+			usb_devSignal();
+	}
+	else {
+		/* URB transfer */
+		t->state = urb_completed;
 		LIST_ADD(&usb_common.finished, t);
-	else if (t->type == usb_transfer_interrupt && t->transferred > 0)
-		hub_notify(t->pipe->dev);
+		condSignal(usb_common.finishedCond);
+	}
 
-	if (t->cond != NULL)
-		condSignal(*t->cond);
 	mutexUnlock(usb_common.transferLock);
 }
 
@@ -123,61 +131,6 @@ static int usb_devsList(char *buffer, size_t size)
 	return 0;
 }
 
-
-static int usb_handleUrb(msg_t *msg, unsigned int port, unsigned long rid)
-{
-	usb_msg_t *umsg = (usb_msg_t *)msg->i.raw;
-	usb_drv_t *drv;
-	usb_transfer_t *t;
-
-	if ((drv = usb_drvFind(msg->pid)) == NULL) {
-		USB_LOG("usb: driver pid %d does not exist!\n", msg->pid);
-		return -EINVAL;
-	}
-
-	if ((t = calloc(1, sizeof(usb_transfer_t))) == NULL)
-		return -ENOMEM;
-
-	t->direction = umsg->urb.dir;
-	t->transferred = 0;
-	t->size = umsg->urb.size;
-	t->cond = &usb_common.finishedCond;
-
-	if ((t->msg = malloc(sizeof(msg_t))) == NULL) {
-		free(t);
-		return -ENOMEM;
-	}
-
-	if (t->size > 0) {
-		if ((t->buffer = usb_alloc(t->size)) == NULL) {
-			free(t->msg);
-			free(t);
-			return -ENOMEM;
-		}
-	}
-
-	if (t->type == usb_transfer_control) {
-		t->setup = usb_alloc(sizeof(usb_setup_packet_t));
-		memcpy(t->setup, &umsg->urb.setup, sizeof(usb_setup_packet_t));
-	}
-
-	if (t->direction == usb_dir_out && t->size > 0)
-		memcpy(t->buffer, msg->i.data, t->size);
-
-	memcpy(t->msg, msg, sizeof(msg_t));
-	t->port = port;
-	t->rid = rid;
-
-	if (usb_drvTransfer(drv, t, umsg->urb.pipe) != 0) {
-		usb_free(t->buffer, t->size);
-		usb_free(t->setup, sizeof(usb_setup_packet_t));
-		free(t->msg);
-		free(t);
-		return -EINVAL;
-	}
-
-	return EOK;
-}
 
 
 static int usb_handleConnect(msg_t *msg, usb_connect_t *c)
@@ -229,6 +182,48 @@ static int usb_handleOpen(usb_open_t *o, msg_t *msg)
 }
 
 
+static void usb_urbAsyncCompleted(usb_transfer_t *t)
+{
+	msg_t msg = { 0 };
+	usb_msg_t *umsg = (usb_msg_t *)&msg.i.raw;
+	usb_completion_t *c = &umsg->completion;
+
+	umsg->type = usb_msg_completion;
+
+	c->pipeid = t->pipeid;
+	c->urbid = t->linkage.id;
+	c->transferred = t->transferred;
+	c->err = t->error;
+
+	msg.type = mtDevCtl;
+	if (t->direction == usb_dir_in) {
+		msg.i.size = t->transferred;
+		msg.i.data = t->buffer;
+	}
+	t->state = urb_idle;
+
+	msgSend(t->port, &msg);
+	usb_transferPut(t);
+}
+
+
+static void usb_urbSyncCompleted(usb_transfer_t *t)
+{
+	msg_t msg = { 0 };
+
+	msg.type = mtDevCtl;
+	msg.pid = t->pid;
+	msg.o.io.err = (t->error != 0) ? -t->error : t->transferred;
+
+	if (t->direction == usb_dir_in)
+		msg.o.data = t->buffer;
+
+	/* TODO: it should be non-blocking */
+	msgRespond(usb_common.port, &msg, t->rid);
+	usb_transferFree(t);
+}
+
+
 static void usb_statusthr(void *arg)
 {
 	usb_transfer_t *t;
@@ -241,19 +236,10 @@ static void usb_statusthr(void *arg)
 		LIST_REMOVE(&usb_common.finished, t);
 		mutexUnlock(usb_common.transferLock);
 
-		if (t->type == usb_transfer_bulk || t->type == usb_transfer_control) {
-			t->msg->o.io.err = (t->error != 0) ? -t->error : t->transferred;
-
-			if (t->direction == usb_dir_in)
-				memcpy(t->msg->o.data, t->buffer, t->transferred);
-
-			/* TODO: it should be non-blocking */
-			msgRespond(t->port, t->msg, t->rid);
-			free(t->msg);
-			usb_free(t->buffer, t->size);
-			usb_free(t->setup, sizeof(usb_setup_packet_t));
-			free(t);
-		}
+		if (t->async)
+			usb_urbAsyncCompleted(t);
+		else
+			usb_urbSyncCompleted(t);
 	}
 }
 
@@ -286,14 +272,17 @@ static void usb_msgthr(void *arg)
 							msg.o.io.err = -1;
 						break;
 					case usb_msg_urb:
-						if ((ret = usb_handleUrb(&msg, port, rid)) != 0)
+						if ((ret = usb_handleUrb(&msg, port, rid)) <= 0)
 							msg.o.io.err = ret;
-						else
+						else if (ret == 1) /* Sync trasnfer */
 							resp = 0;
+						break;
+					case usb_msg_urbcmd:
+						msg.o.io.err = usb_handleUrbcmd(&msg);
 						break;
 					default:
 						msg.o.io.err = -EINVAL;
-						USB_LOG("usb: unsupported usb_msg type\n");
+						USB_LOG("usb: unsupported usb_msg type: %d\n", umsg->type);
 						break;
 				}
 				break;

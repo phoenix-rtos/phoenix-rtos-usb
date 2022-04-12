@@ -162,7 +162,6 @@ static int hub_interruptInit(usb_dev_t *hub)
 	t->type = usb_transfer_interrupt;
 	t->direction = usb_dir_in;
 	t->size = (hub->nports / 8) + 1;
-	t->cond = &hub_common.cond;
 
 	hub->statusTransfer = t;
 
@@ -172,7 +171,7 @@ static int hub_interruptInit(usb_dev_t *hub)
 
 static int hub_poll(usb_dev_t *hub)
 {
-	return usb_transferSubmit(hub->statusTransfer, 0);
+	return usb_transferSubmit(hub->statusTransfer, NULL);
 }
 
 

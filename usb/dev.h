@@ -82,4 +82,7 @@ void usb_devSetChild(usb_dev_t *parent, int port, usb_dev_t *child);
 int usb_isRoothub(usb_dev_t *dev);
 
 
+void usb_devSignal(void);
+
+
 #endif /* _USB_DEV_H_ */
