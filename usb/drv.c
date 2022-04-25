@@ -338,14 +338,17 @@ int usb_drvUnbind(usb_drv_t *drv, usb_dev_t *dev, int iface)
 	msg_t msg = { 0 };
 	usb_msg_t *umsg = (usb_msg_t *)msg.i.raw;
 	usb_pipe_t *pipe;
-	rbnode_t *n;
+	rbnode_t *n, *nn;
 
 	mutexLock(usbdrv_common.lock);
 
-	while ((n = lib_rbMinimum(drv->pipes.root)) != NULL) {
+	n = lib_rbMinimum(drv->pipes.root);
+	while (n != NULL) {
 		pipe = lib_treeof(usb_pipe_t, linkage, n);
+		nn = lib_rbNext(n);
 		if (pipe->dev == dev)
 			_usb_pipeFree(drv, pipe);
+		n = nn;
 	}
 
 	mutexUnlock(usbdrv_common.lock);
