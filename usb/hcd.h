@@ -32,7 +32,7 @@ typedef struct hcd_ops {
 	const char type[HCD_TYPE_LEN];
 
 	int (*init)(struct hcd *);
-	int (*transferEnqueue)(struct hcd *, usb_transfer_t *);
+	int (*transferEnqueue)(struct hcd *, usb_transfer_t *, usb_pipe_t *);
 	void (*transferDequeue)(struct hcd *, usb_transfer_t *);
 	void (*pipeDestroy)(struct hcd *, usb_pipe_t *);
 	uint32_t (*getRoothubStatus)(usb_dev_t *);

@@ -32,19 +32,6 @@ struct {
 } usbdrv_common;
 
 
-
-usb_pipe_t *usb_pipeFind(usb_drv_t *drv, int pipeid)
-{
-	usb_pipe_t *res;
-
-	mutexLock(usbdrv_common.lock);
-	res = lib_treeof(usb_pipe_t, linkage, idtree_find(&drv->pipes, pipeid));
-	mutexUnlock(usbdrv_common.lock);
-
-	return res;
-}
-
-
 static usb_pipe_t *_usb_pipeFind(usb_drv_t *drv, int pipeid)
 {
 	return lib_treeof(usb_pipe_t, linkage, idtree_find(&drv->pipes, pipeid));
@@ -194,9 +181,10 @@ static int _usb_drvTransfer(usb_drv_t *drv, usb_transfer_t *t)
 	if (pipe == NULL)
 		return -EINVAL;
 
-	t->pipe = pipe;
+	t->type = pipe->type;
 
-	return usb_transferSubmit(t, NULL);
+
+	return usb_transferSubmit(t, pipe, NULL);
 }
 
 
@@ -286,9 +274,9 @@ static usb_drv_t *usb_drvMatchIface(usb_dev_t *dev, usb_iface_t *iface)
 }
 
 
-static int _usb_urbCancel(usb_transfer_t *t, usb_drv_t *drv)
+static int _usb_urbCancel(usb_transfer_t *t, usb_pipe_t *pipe)
 {
-	hcd_t *hcd = t->pipe->dev->hcd;
+	hcd_t *hcd = pipe->dev->hcd;
 
 	hcd->ops->transferDequeue(hcd, t);
 
@@ -296,11 +284,10 @@ static int _usb_urbCancel(usb_transfer_t *t, usb_drv_t *drv)
 }
 
 
-static int _usb_urbFree(usb_transfer_t *t, usb_drv_t *drv)
+static int _usb_urbFree(usb_transfer_t *t, usb_drv_t *drv, usb_pipe_t *pipe)
 {
 	if (t->state == urb_ongoing)
-		_usb_urbCancel(t, drv);
-
+		_usb_urbCancel(t, pipe);
 	/* Remove from the drv's urbs tree */
 	idtree_remove(&drv->urbs, &t->linkage);
 	_usb_transferPut(t);
@@ -320,8 +307,8 @@ static void _usb_pipeFree(usb_drv_t *drv, usb_pipe_t *pipe)
 		while (n != NULL) {
 			t = lib_treeof(usb_transfer_t, linkage, n);
 			nn = lib_rbNext(n);
-			if (t->pipeid == pipe->linkage.id)
-				_usb_urbFree(t, drv);
+			if (t->pipeid == usb_pipeid(pipe))
+				_usb_urbFree(t, drv, pipe);
 			n = nn;
 		}
 
@@ -479,10 +466,9 @@ static int _usb_urbSubmit(usb_transfer_t *t, usb_pipe_t *pipe)
 		return -EBUSY;
 
 	t->state = urb_ongoing;
-	t->pipe = pipe;
-	t->pipeid = pipe->linkage.id;
+	t->pipeid = usb_pipeid(pipe);
 
-	if (usb_transferSubmit(t, NULL) < 0) {
+	if (usb_transferSubmit(t, pipe, NULL) < 0) {
 		t->state = urb_idle;
 		return -EIO;
 	}
@@ -517,10 +503,10 @@ static int _usb_handleUrbcmd(msg_t *msg)
 			ret = _usb_urbSubmit(t, pipe);
 			break;
 		case urbcmd_cancel:
-			ret = _usb_urbCancel(t, drv);
+			ret = _usb_urbCancel(t, pipe);
 			break;
 		case urbcmd_free:
-			ret = _usb_urbFree(t, drv);
+			ret = _usb_urbFree(t, drv, pipe);
 			break;
 		default:
 			ret = -EINVAL;

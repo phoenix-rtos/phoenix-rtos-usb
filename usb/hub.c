@@ -152,7 +152,7 @@ static int hub_interruptInit(usb_dev_t *hub)
 		return -ENOMEM;
 	}
 
-	if ((t->pipe = usb_pipeOpen(hub, 0, usb_dir_in, usb_transfer_interrupt)) == NULL) {
+	if ((hub->irqPipe = usb_pipeOpen(hub, 0, usb_dir_in, usb_transfer_interrupt)) == NULL) {
 		usb_free(t->buffer, sizeof(uint32_t));
 		free(t);
 		USB_LOG("hub: Fail to open interrupt pipe!\n");
@@ -162,6 +162,7 @@ static int hub_interruptInit(usb_dev_t *hub)
 	t->type = usb_transfer_interrupt;
 	t->direction = usb_dir_in;
 	t->size = (hub->nports / 8) + 1;
+	t->hub = hub;
 
 	hub->statusTransfer = t;
 
@@ -171,7 +172,7 @@ static int hub_interruptInit(usb_dev_t *hub)
 
 static int hub_poll(usb_dev_t *hub)
 {
-	return usb_transferSubmit(hub->statusTransfer, NULL);
+	return usb_transferSubmit(hub->statusTransfer, hub->irqPipe, NULL);
 }
 
 

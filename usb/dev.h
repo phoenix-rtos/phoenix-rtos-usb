@@ -54,6 +54,7 @@ typedef struct _usb_dev {
 	/* Hub fields */
 	struct _usb_dev **devs;
 	struct usb_transfer *statusTransfer;
+	usb_pipe_t *irqPipe;
 	int nports;
 } usb_dev_t;
 
