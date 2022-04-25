@@ -41,7 +41,6 @@ struct {
 int usb_devCtrl(usb_dev_t *dev, usb_dir_t dir, usb_setup_packet_t *setup, char *buf, size_t len)
 {
 	usb_transfer_t t = (usb_transfer_t) {
-		.pipe = dev->ctrlPipe,
 		.type = usb_transfer_control,
 		.direction = dir,
 		.setup = (usb_setup_packet_t *)usbdev_common.setupBuf,
@@ -57,7 +56,7 @@ int usb_devCtrl(usb_dev_t *dev, usb_dir_t dir, usb_setup_packet_t *setup, char *
 	if (dir == usb_dir_out && len > 0)
 		memcpy(usbdev_common.ctrlBuf, buf, len);
 
-	if ((ret = usb_transferSubmit(&t, &usbdev_common.cond)) != 0) {
+	if ((ret = usb_transferSubmit(&t, dev->ctrlPipe, &usbdev_common.cond)) != 0) {
 		mutexUnlock(usbdev_common.lock);
 		return ret;
 	}
@@ -140,7 +139,7 @@ void usb_devFree(usb_dev_t *dev)
 
 	usb_drvPipeFree(NULL, dev->ctrlPipe);
 	if (dev->statusTransfer != NULL) {
-		usb_drvPipeFree(NULL, dev->statusTransfer->pipe);
+		usb_drvPipeFree(NULL, dev->irqPipe);
 		usb_free(dev->statusTransfer->buffer, sizeof(uint32_t));
 		free(dev->statusTransfer);
 	}

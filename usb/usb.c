@@ -64,9 +64,9 @@ int usb_transferCheck(usb_transfer_t *t)
 }
 
 
-int usb_transferSubmit(usb_transfer_t *t, handle_t *cond)
+int usb_transferSubmit(usb_transfer_t *t, usb_pipe_t *pipe, handle_t *cond)
 {
-	hcd_t *hcd = t->pipe->dev->hcd;
+	hcd_t *hcd = pipe->dev->hcd;
 	int ret = 0;
 
 	mutexLock(usb_common.transferLock);
@@ -77,7 +77,7 @@ int usb_transferSubmit(usb_transfer_t *t, handle_t *cond)
 		memset(t->buffer, 0, t->size);
 	mutexUnlock(usb_common.transferLock);
 
-	if ((ret = hcd->ops->transferEnqueue(hcd, t)) != 0)
+	if ((ret = hcd->ops->transferEnqueue(hcd, t, pipe)) != 0)
 		return ret;
 
 	/* Internal blocking transfer */
@@ -111,7 +111,7 @@ void usb_transferFinished(usb_transfer_t *t, int status)
 	/* Internal transfer */
 	if (t->port == 0) {
 		if (t->type == usb_transfer_interrupt && t->transferred > 0)
-			hub_notify(t->pipe->dev);
+			hub_notify(t->hub);
 		else
 			usb_devSignal();
 	}

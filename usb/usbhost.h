@@ -19,7 +19,6 @@
 #include <usbdriver.h>
 #include <usb.h>
 
-
 enum { urb_idle, urb_completed, urb_ongoing };
 
 typedef struct {
@@ -37,10 +36,14 @@ typedef struct {
 } usb_pipe_t;
 
 
+static inline int usb_pipeid(usb_pipe_t *pipe)
+{
+	return pipe->linkage.id;
+}
+
 /* Used to handle both internal and external transfers */
 typedef struct usb_transfer {
 	struct usb_transfer *next, *prev;
-	usb_pipe_t *pipe;
 	usb_setup_packet_t *setup;
 
 	unsigned async;
@@ -61,6 +64,8 @@ typedef struct usb_transfer {
 	unsigned long rid;
 	unsigned int port;
 	pid_t pid;
+
+	struct _usb_dev *hub;
 
 	void *hcdpriv;
 } usb_transfer_t;
@@ -93,7 +98,7 @@ void usb_transferFinished(usb_transfer_t *t, int status);
 int usb_transferCheck(usb_transfer_t *t);
 
 
-int usb_transferSubmit(usb_transfer_t *t, handle_t *cond);
+int usb_transferSubmit(usb_transfer_t *t, usb_pipe_t *pipe, handle_t *cond);
 
 
 void usb_transferFree(usb_transfer_t *t);
