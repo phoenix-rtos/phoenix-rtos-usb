@@ -555,6 +555,7 @@ static int _usb_handleUrb(msg_t *msg, unsigned int port, unsigned long rid)
 	usb_urb_t *urb = &umsg->urb;
 	usb_drv_t *drv;
 	usb_transfer_t *t;
+	int ret = 0;
 
 	if ((drv = _usb_drvFind(msg->pid)) == NULL) {
 		USB_LOG("usb: driver pid %d does not exist!\n", msg->pid);
@@ -577,7 +578,7 @@ static int _usb_handleUrb(msg_t *msg, unsigned int port, unsigned long rid)
 		}
 
 		t->refcnt = 1;
-		*(int *)msg->o.raw = t->linkage.id;
+		ret = t->linkage.id;
 	}
 	else {
 		t->rid = rid;
@@ -591,7 +592,7 @@ static int _usb_handleUrb(msg_t *msg, unsigned int port, unsigned long rid)
 
 	/* For async urbs, respond immediately and send usb_completion msg later.
 	 * For sync ones, block the sender, and respond later */
-	return urb->sync;
+	return ret;
 }
 
 

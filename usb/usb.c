@@ -272,10 +272,14 @@ static void usb_msgthr(void *arg)
 							msg.o.io.err = -1;
 						break;
 					case usb_msg_urb:
-						if ((ret = usb_handleUrb(&msg, port, rid)) <= 0)
-							msg.o.io.err = ret;
-						else if (ret == 1) /* Sync trasnfer */
+						ret = usb_handleUrb(&msg, port, rid);
+						if (umsg->urb.sync && ret == 0) {
+							/* Block the sender until the transfer finishes */
 							resp = 0;
+						}
+						else {
+							msg.o.io.err = ret;
+						}
 						break;
 					case usb_msg_urbcmd:
 						msg.o.io.err = usb_handleUrbcmd(&msg);
