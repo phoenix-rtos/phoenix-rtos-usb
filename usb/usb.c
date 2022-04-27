@@ -36,7 +36,6 @@
 
 #define N_STATUSTHRS   2
 #define STATUSTHR_PRIO 3
-
 #define MSGTHR_PRIO    3
 
 
@@ -96,6 +95,8 @@ int usb_transferSubmit(usb_transfer_t *t, usb_pipe_t *pipe, handle_t *cond)
 /* Called by the hcd driver */
 void usb_transferFinished(usb_transfer_t *t, int status)
 {
+	int urbtrans = 0;
+
 	mutexLock(usb_common.transferLock);
 	t->finished = 1;
 
@@ -108,8 +109,17 @@ void usb_transferFinished(usb_transfer_t *t, int status)
 		t->error = -status;
 	}
 
+	/* URB transfer */
+	if (t->port != 0) {
+		urbtrans = 1;
+		t->state = urb_completed;
+		LIST_ADD(&usb_common.finished, t);
+	}
+
+	mutexUnlock(usb_common.transferLock);
+
 	/* Internal transfer */
-	if (t->port == 0) {
+	if (!urbtrans) {
 		if (t->type == usb_transfer_interrupt && t->transferred > 0)
 			hub_notify(t->hub);
 		else
@@ -117,12 +127,8 @@ void usb_transferFinished(usb_transfer_t *t, int status)
 	}
 	else {
 		/* URB transfer */
-		t->state = urb_completed;
-		LIST_ADD(&usb_common.finished, t);
 		condSignal(usb_common.finishedCond);
 	}
-
-	mutexUnlock(usb_common.transferLock);
 }
 
 

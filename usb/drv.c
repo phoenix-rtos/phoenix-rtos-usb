@@ -183,7 +183,6 @@ static int _usb_drvTransfer(usb_drv_t *drv, usb_transfer_t *t)
 
 	t->type = pipe->type;
 
-
 	return usb_transferSubmit(t, pipe, NULL);
 }
 
@@ -198,7 +197,6 @@ int usb_drvTransfer(usb_drv_t *drv, usb_transfer_t *t, int pipeId)
 
 	return ret;
 }
-
 
 
 static int usb_drvcmp(usb_device_desc_t *dev, usb_interface_desc_t *iface, usb_device_id_t *filter)
@@ -419,7 +417,6 @@ void usb_drvAdd(usb_drv_t *drv)
 }
 
 
-
 static usb_transfer_t *usb_transferAlloc(int sync, int type, usb_setup_packet_t *setup, usb_dir_t dir, size_t size, char *buf)
 {
 	usb_transfer_t *t;
@@ -443,11 +440,17 @@ static usb_transfer_t *usb_transferAlloc(int sync, int type, usb_setup_packet_t 
 
 	if (type == usb_transfer_control) {
 		t->setup = usb_alloc(sizeof(usb_setup_packet_t));
+		if (t->setup == NULL) {
+			usb_free(t->buffer, t->size);
+			free(t);
+			return NULL;
+		}
 		memcpy(t->setup, setup, sizeof(usb_setup_packet_t));
 	}
 
 	if (dir == usb_dir_out && size > 0)
 		memcpy(t->buffer, buf, t->size);
+
 	return t;
 }
 
