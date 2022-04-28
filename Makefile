@@ -13,7 +13,8 @@ include ../phoenix-rtos-build/Makefile.common
 # default path for the programs to be installed in rootfs
 DEFAULT_INSTALL_PATH := /sbin
 
-DEFAULT_TARGETS := libusb
+DEFAULT_COMPONENTS := libusb
+ALL_COMPONENTS := libusb usb
 
 ALL_MAKES := $(wildcard */Makefile)
 include $(ALL_MAKES)
