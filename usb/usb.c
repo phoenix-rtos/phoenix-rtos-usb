@@ -34,7 +34,7 @@
 #include "hub.h"
 
 
-#define N_STATUSTHRS   2
+#define N_STATUSTHRS   1
 #define STATUSTHR_PRIO 3
 #define MSGTHR_PRIO    3
 
