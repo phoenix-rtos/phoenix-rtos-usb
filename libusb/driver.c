@@ -198,7 +198,7 @@ int usb_urbAlloc(unsigned pipe, void *data, usb_dir_t dir, size_t size, int type
 }
 
 
-int usb_transferAsync(unsigned pipe, unsigned urbid, size_t size)
+int usb_transferAsync(unsigned pipe, unsigned urbid, size_t size, usb_setup_packet_t *setup)
 {
 	msg_t msg = { 0 };
 	usb_msg_t *umsg = (usb_msg_t *)msg.i.raw;
@@ -210,6 +210,9 @@ int usb_transferAsync(unsigned pipe, unsigned urbid, size_t size)
 	urbcmd->urbid = urbid;
 	urbcmd->cmd = urbcmd_submit;
 
+	if (setup != NULL) {
+		memcpy(&urbcmd->setup, setup, sizeof(*setup));
+	}
 	msg.type = mtDevCtl;
 	umsg->type = usb_msg_urbcmd;
 	if ((ret = msgSend(usbdrv_common.port, &msg)) < 0)

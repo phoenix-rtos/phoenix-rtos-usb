@@ -94,6 +94,7 @@ typedef struct {
 	int pipeid;
 	int urbid;
 	size_t size;
+	usb_setup_packet_t setup;
 	enum {
 		urbcmd_submit,
 		urbcmd_cancel,
@@ -159,7 +160,7 @@ int usb_transferControl(unsigned pipe, usb_setup_packet_t *setup, void *data, si
 int usb_transferBulk(unsigned pipe, void *data, size_t size, usb_dir_t dir);
 
 
-int usb_transferAsync(unsigned pipe, unsigned urbid, size_t size);
+int usb_transferAsync(unsigned pipe, unsigned urbid, size_t size, usb_setup_packet_t *setup);
 
 
 int usb_setConfiguration(unsigned pipe, int conf);
