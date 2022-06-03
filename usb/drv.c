@@ -503,6 +503,9 @@ static int _usb_handleUrbcmd(msg_t *msg)
 
 	switch (urbcmd->cmd) {
 		case urbcmd_submit:
+			if (t->type == usb_transfer_control) {
+				memcpy(t->setup, &urbcmd->setup, sizeof(urbcmd->setup));
+			}
 			ret = _usb_urbSubmit(t, pipe);
 			break;
 		case urbcmd_cancel:
