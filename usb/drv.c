@@ -284,9 +284,10 @@ static int _usb_urbCancel(usb_transfer_t *t, usb_pipe_t *pipe)
 
 static int _usb_urbFree(usb_transfer_t *t, usb_drv_t *drv, usb_pipe_t *pipe)
 {
-	if (t->state == urb_ongoing)
-		_usb_urbCancel(t, pipe);
-	/* Remove from the drv's urbs tree */
+	/* Remove from the drv's urbs tree.
+	 * No need to cancel the transfer, it will be
+	 * cleaned up automatically, by the hcd thread.
+	 */
 	idtree_remove(&drv->urbs, &t->linkage);
 	_usb_transferPut(t);
 
