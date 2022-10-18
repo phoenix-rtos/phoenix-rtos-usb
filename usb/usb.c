@@ -139,14 +139,14 @@ static int usb_devsList(char *buffer, size_t size)
 
 
 
-static int usb_handleConnect(msg_t *msg, usb_connect_t *c)
+static int usb_handleConnect(msg_t *msg, usbdrv_connect_t *c)
 {
 	usb_drv_t *drv;
 
 	if ((drv = malloc(sizeof(usb_drv_t))) == NULL)
 		return -ENOMEM;
 
-	if ((drv->filters = malloc(sizeof(usb_device_id_t) * c->nfilters)) == NULL) {
+	if ((drv->filters = malloc(sizeof(usbdrv_devid_t) * c->nfilters)) == NULL) {
 		free(drv);
 		return -ENOMEM;
 	}
@@ -163,7 +163,7 @@ static int usb_handleConnect(msg_t *msg, usb_connect_t *c)
 }
 
 
-static int usb_handleOpen(usb_open_t *o, msg_t *msg)
+static int usb_handleOpen(usbdrv_open_t *o, msg_t *msg)
 {
 	usb_drv_t *drv;
 	int pipe;
@@ -191,10 +191,10 @@ static int usb_handleOpen(usb_open_t *o, msg_t *msg)
 static void usb_urbAsyncCompleted(usb_transfer_t *t)
 {
 	msg_t msg = { 0 };
-	usb_msg_t *umsg = (usb_msg_t *)&msg.i.raw;
-	usb_completion_t *c = &umsg->completion;
+	usbdrv_msg_t *umsg = (usbdrv_msg_t *)&msg.i.raw;
+	usbdrv_completion_t *c = &umsg->completion;
 
-	umsg->type = usb_msg_completion;
+	umsg->type = usbdrv_msg_completion;
 
 	c->pipeid = t->pipeid;
 	c->urbid = t->linkage.id;
@@ -255,7 +255,7 @@ static void usb_msgthr(void *arg)
 	unsigned port = (int)arg;
 	unsigned long rid;
 	msg_t msg;
-	usb_msg_t *umsg;
+	usbdrv_msg_t *umsg;
 	int resp;
 	int ret;
 
@@ -268,16 +268,16 @@ static void usb_msgthr(void *arg)
 				msg.o.io.err = usb_devsList(msg.o.data, msg.o.size);
 				break;
 			case mtDevCtl:
-				umsg = (usb_msg_t *)msg.i.raw;
+				umsg = (usbdrv_msg_t *)msg.i.raw;
 				switch (umsg->type) {
-					case usb_msg_connect:
+					case usbdrv_msg_connect:
 						msg.o.io.err = usb_handleConnect(&msg, &umsg->connect);
 						break;
-					case usb_msg_open:
+					case usbdrv_msg_open:
 						if (usb_handleOpen(&umsg->open, &msg) != 0)
 							msg.o.io.err = -1;
 						break;
-					case usb_msg_urb:
+					case usbdrv_msg_urb:
 						ret = usb_handleUrb(&msg, port, rid);
 						if (umsg->urb.sync && ret == 0) {
 							/* Block the sender until the transfer finishes */
@@ -287,7 +287,7 @@ static void usb_msgthr(void *arg)
 							msg.o.io.err = ret;
 						}
 						break;
-					case usb_msg_urbcmd:
+					case usbdrv_msg_urbcmd:
 						msg.o.io.err = usb_handleUrbcmd(&msg);
 						break;
 					default:

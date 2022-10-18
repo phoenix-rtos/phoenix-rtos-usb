@@ -199,7 +199,7 @@ int usb_drvTransfer(usb_drv_t *drv, usb_transfer_t *t, int pipeId)
 }
 
 
-static int usb_drvcmp(usb_device_desc_t *dev, usb_interface_desc_t *iface, usb_device_id_t *filter)
+static int usb_drvcmp(usb_device_desc_t *dev, usb_interface_desc_t *iface, usbdrv_devid_t *filter)
 {
 	int match = usbdrv_match;
 
@@ -322,7 +322,7 @@ static void _usb_pipeFree(usb_drv_t *drv, usb_pipe_t *pipe)
 int usb_drvUnbind(usb_drv_t *drv, usb_dev_t *dev, int iface)
 {
 	msg_t msg = { 0 };
-	usb_msg_t *umsg = (usb_msg_t *)msg.i.raw;
+	usbdrv_msg_t *umsg = (usbdrv_msg_t *)msg.i.raw;
 	usb_pipe_t *pipe;
 	rbnode_t *n, *nn;
 
@@ -339,7 +339,7 @@ int usb_drvUnbind(usb_drv_t *drv, usb_dev_t *dev, int iface)
 
 	mutexUnlock(usbdrv_common.lock);
 	msg.type = mtDevCtl;
-	umsg->type = usb_msg_deletion;
+	umsg->type = usbdrv_msg_deletion;
 	umsg->deletion.bus = dev->hcd->num;
 	umsg->deletion.dev = dev->address;
 	umsg->deletion.interface = iface;
@@ -353,11 +353,11 @@ int usb_drvBind(usb_dev_t *dev)
 {
 	usb_drv_t *drv;
 	msg_t msg = { 0 };
-	usb_msg_t *umsg = (usb_msg_t *)msg.i.raw;
+	usbdrv_msg_t *umsg = (usbdrv_msg_t *)msg.i.raw;
 	int i;
 
 	msg.type = mtDevCtl;
-	umsg->type = usb_msg_insertion;
+	umsg->type = usbdrv_msg_insertion;
 	umsg->insertion.bus = dev->hcd->num;
 	umsg->insertion.dev = dev->address;
 	umsg->insertion.descriptor = dev->desc;
@@ -483,8 +483,8 @@ static int _usb_urbSubmit(usb_transfer_t *t, usb_pipe_t *pipe)
 
 static int _usb_handleUrbcmd(msg_t *msg)
 {
-	usb_msg_t *umsg = (usb_msg_t *)msg->i.raw;
-	usb_urbcmd_t *urbcmd = &umsg->urbcmd;
+	usbdrv_msg_t *umsg = (usbdrv_msg_t *)msg->i.raw;
+	usbdrv_urbcmd_t *urbcmd = &umsg->urbcmd;
 	usb_transfer_t *t;
 	usb_pipe_t *pipe;
 	usb_drv_t *drv;
@@ -544,8 +544,8 @@ int usb_handleUrbcmd(msg_t *msg)
 
 static int _usb_handleUrb(msg_t *msg, unsigned int port, unsigned long rid)
 {
-	usb_msg_t *umsg = (usb_msg_t *)msg->i.raw;
-	usb_urb_t *urb = &umsg->urb;
+	usbdrv_msg_t *umsg = (usbdrv_msg_t *)msg->i.raw;
+	usbdrv_urb_t *urb = &umsg->urb;
 	usb_drv_t *drv;
 	usb_transfer_t *t;
 	int ret = 0;

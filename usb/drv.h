@@ -24,7 +24,7 @@ typedef struct _usb_drv {
 	pid_t pid;
 	unsigned port;
 	unsigned nfilters;
-	usb_device_id_t *filters;
+	usbdrv_devid_t *filters;
 	idtree_t pipes;
 	idtree_t urbs;
 } usb_drv_t;
