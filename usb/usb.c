@@ -44,7 +44,6 @@ static struct {
 	handle_t transferLock;
 	handle_t finishedCond;
 	hcd_t *hcds;
-	usb_drv_t *drvs;
 	usb_transfer_t *finished;
 	int nhcd;
 	uint32_t port;
@@ -134,31 +133,6 @@ void usb_transferFinished(usb_transfer_t *t, int status)
 
 static int usb_devsList(char *buffer, size_t size)
 {
-	return 0;
-}
-
-
-
-static int usb_handleConnect(msg_t *msg, usbdrv_connect_t *c)
-{
-	usb_drv_t *drv;
-
-	if ((drv = malloc(sizeof(usb_drv_t))) == NULL)
-		return -ENOMEM;
-
-	if ((drv->filters = malloc(sizeof(usbdrv_devid_t) * c->nfilters)) == NULL) {
-		free(drv);
-		return -ENOMEM;
-	}
-
-	drv->pid = msg->pid;
-	drv->port = c->port;
-	drv->nfilters = c->nfilters;
-	memcpy(drv->filters, msg->i.data, msg->i.size);
-	usb_drvAdd(drv);
-
-	/* TODO: handle orphaned devices */
-
 	return 0;
 }
 

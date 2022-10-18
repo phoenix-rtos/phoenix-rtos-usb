@@ -26,6 +26,18 @@
 #include "drv.h"
 #include "hcd.h"
 
+
+typedef struct _usb_drv {
+	struct _usb_drv *next, *prev;
+	pid_t pid;
+	unsigned port;
+	unsigned nfilters;
+	usbdrv_devid_t *filters;
+	idtree_t pipes;
+	idtree_t urbs;
+} usb_drv_t;
+
+
 struct {
 	handle_t lock;
 	usb_drv_t *drvs;
@@ -408,7 +420,7 @@ usb_drv_t *usb_drvFind(int pid)
 }
 
 
-void usb_drvAdd(usb_drv_t *drv)
+static void usb_drvAdd(usb_drv_t *drv)
 {
 	mutexLock(usbdrv_common.lock);
 	idtree_init(&drv->pipes);
@@ -617,6 +629,29 @@ int usb_drvInit(void)
 		USB_LOG("usbdrv: Can't create mutex!\n");
 		return -ENOMEM;
 	}
+
+	return 0;
+}
+
+int usb_handleConnect(msg_t *msg, usbdrv_connect_t *c)
+{
+	usb_drv_t *drv;
+
+	if ((drv = malloc(sizeof(usb_drv_t))) == NULL)
+		return -ENOMEM;
+
+	if ((drv->filters = malloc(sizeof(usbdrv_devid_t) * c->nfilters)) == NULL) {
+		free(drv);
+		return -ENOMEM;
+	}
+
+	drv->pid = msg->pid;
+	drv->port = c->port;
+	drv->nfilters = c->nfilters;
+	memcpy(drv->filters, msg->i.data, msg->i.size);
+	usb_drvAdd(drv);
+
+	/* TODO: handle orphaned devices */
 
 	return 0;
 }

@@ -19,21 +19,11 @@
 #include "dev.h"
 #include "hcd.h"
 
-typedef struct _usb_drv {
-	struct _usb_drv *next, *prev;
-	pid_t pid;
-	unsigned port;
-	unsigned nfilters;
-	usbdrv_devid_t *filters;
-	idtree_t pipes;
-	idtree_t urbs;
-} usb_drv_t;
+
+typedef struct _usb_drv usb_drv_t;
 
 
 usb_drv_t *usb_drvFind(int pid);
-
-
-void usb_drvAdd(usb_drv_t *drv);
 
 
 int usb_drvBind(usb_dev_t *dev);
@@ -67,5 +57,8 @@ int usb_handleUrbcmd(msg_t *msg);
 
 
 int usb_handleUrb(msg_t *msg, unsigned int port, unsigned long rid);
+
+
+int usb_handleConnect(msg_t *msg, usbdrv_connect_t *c);
 
 #endif /* _USB_DRV_H_ */
