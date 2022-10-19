@@ -19,12 +19,20 @@
 #include <stdlib.h>
 #include <posix/utils.h>
 #include <string.h>
+#include <sys/mman.h>
 
 #include <usb.h>
 #include <usbdriver.h>
 
 #include "drv.h"
 #include "hcd.h"
+
+
+struct usb_chunk {
+	rbnode_t linkage;
+	addr_t physaddr;
+	void *vaddr;
+};
 
 
 typedef struct _usb_drv {
@@ -35,6 +43,7 @@ typedef struct _usb_drv {
 	usbdrv_devid_t *filters;
 	idtree_t pipes;
 	idtree_t urbs;
+	rbtree_t chunks;
 } usb_drv_t;
 
 
@@ -42,6 +51,23 @@ struct {
 	handle_t lock;
 	usb_drv_t *drvs;
 } usbdrv_common;
+
+
+static int usb_chunkcmp(rbnode_t *n1, rbnode_t *n2)
+{
+	struct usb_chunk *c1 = lib_treeof(struct usb_chunk, linkage, n1);
+	struct usb_chunk *c2 = lib_treeof(struct usb_chunk, linkage, n2);
+
+	if (c1->physaddr == c2->physaddr) {
+		return 0;
+	}
+	else if (c1->physaddr > c2->physaddr) {
+		return 1;
+	}
+	else {
+		return -1;
+	}
+}
 
 
 static usb_pipe_t *_usb_pipeFind(usb_drv_t *drv, int pipeid)
@@ -425,6 +451,7 @@ static void usb_drvAdd(usb_drv_t *drv)
 	mutexLock(usbdrv_common.lock);
 	idtree_init(&drv->pipes);
 	idtree_init(&drv->urbs);
+	lib_rbInit(&drv->chunks, usb_chunkcmp, NULL);
 	LIST_ADD(&usbdrv_common.drvs, drv);
 	mutexUnlock(usbdrv_common.lock);
 }
@@ -654,4 +681,80 @@ int usb_handleConnect(msg_t *msg, usbdrv_connect_t *c)
 	/* TODO: handle orphaned devices */
 
 	return 0;
+}
+
+
+static addr_t _usb_chunkAlloc(usb_drv_t *drv, size_t size)
+{
+	struct usb_chunk *chunk;
+	addr_t physaddr;
+	void *ptr;
+
+	ptr = usb_alloc(size);
+	if (ptr == NULL) {
+		return 0;
+	}
+
+	physaddr = va2pa(ptr);
+
+	chunk = malloc(sizeof(struct usb_chunk));
+	if (chunk == NULL) {
+		usb_free(ptr, size);
+		return 0;
+	}
+
+	chunk->physaddr = physaddr;
+	chunk->vaddr = ptr;
+
+	lib_rbInsert(&drv->chunks, &chunk->linkage);
+
+	return physaddr;
+}
+
+
+static void _usb_chunkFree(usb_drv_t *drv, addr_t physaddr, size_t size)
+{
+	struct usb_chunk find, *chunk = NULL;
+	find.physaddr = physaddr;
+
+	chunk = lib_treeof(struct usb_chunk, linkage, lib_rbFind(&drv->chunks, &find.linkage));
+	if (chunk != NULL) {
+		usb_free(chunk->vaddr, size);
+		lib_rbRemove(&drv->chunks, &chunk->linkage);
+		free(chunk);
+	}
+}
+
+
+void usb_handleAlloc(msg_t *msg, usbdrv_in_alloc_t *inalloc)
+{
+	usbdrv_out_alloc_t *outalloc = (usbdrv_out_alloc_t *)msg->o.raw;
+	usb_drv_t *drv;
+	addr_t physaddr;
+
+	mutexLock(usbdrv_common.lock);
+	drv = _usb_drvFind(msg->pid);
+	if (drv == NULL) {
+		/* Unknown driver */
+		physaddr = 0;
+	}
+	else {
+		physaddr = _usb_chunkAlloc(drv, inalloc->size);
+	}
+	mutexUnlock(usbdrv_common.lock);
+
+	outalloc->physaddr = physaddr;
+}
+
+
+void usb_handleFree(msg_t *msg, usbdrv_in_free_t *infree)
+{
+	usb_drv_t *drv;
+
+	mutexLock(usbdrv_common.lock);
+	drv = _usb_drvFind(msg->pid);
+	if (drv != NULL) {
+		_usb_chunkFree(drv, infree->physaddr, infree->size);
+	}
+	mutexUnlock(usbdrv_common.lock);
 }

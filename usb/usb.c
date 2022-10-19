@@ -244,6 +244,12 @@ static void usb_msgthr(void *arg)
 			case mtDevCtl:
 				umsg = (usbdrv_msg_t *)msg.i.raw;
 				switch (umsg->type) {
+					case usbdrv_msg_alloc:
+						usb_handleAlloc(&msg, &umsg->alloc);
+						break;
+					case usbdrv_msg_free:
+						usb_handleFree(&msg, &umsg->free);
+						break;
 					case usbdrv_msg_connect:
 						msg.o.io.err = usb_handleConnect(&msg, &umsg->connect);
 						break;

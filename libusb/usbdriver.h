@@ -103,6 +103,22 @@ typedef struct {
 
 
 typedef struct {
+	size_t size;
+} usbdrv_in_alloc_t;
+
+
+typedef struct {
+	addr_t physaddr;
+} usbdrv_out_alloc_t;
+
+
+typedef struct {
+	size_t size;
+	addr_t physaddr;
+} usbdrv_in_free_t;
+
+
+typedef struct {
 	int pipeid;
 	int urbid;
 	size_t transferred;
@@ -111,7 +127,10 @@ typedef struct {
 
 
 typedef struct {
-	enum { usbdrv_msg_connect,
+	enum {
+		usbdrv_msg_alloc,
+		usbdrv_msg_free,
+		usbdrv_msg_connect,
 		usbdrv_msg_insertion,
 		usbdrv_msg_deletion,
 		usbdrv_msg_urb,
@@ -120,6 +139,8 @@ typedef struct {
 		usbdrv_msg_completion } type;
 
 	union {
+		usbdrv_in_alloc_t alloc;
+		usbdrv_in_free_t free;
 		usbdrv_connect_t connect;
 		usbdrv_urb_t urb;
 		usbdrv_urbcmd_t urbcmd;
@@ -137,6 +158,13 @@ typedef struct {
 	uint8_t msg[31];
 	int scsiresp;
 } usbdrv_modeswitch_t;
+
+
+/* Allocate memory used for usb transfers */
+void *usbdrv_alloc(size_t size);
+
+/* Frees memory used for usb transfers. The caller must ensure there is no ongoing URB using this memory chunk */
+void usbdrv_free(void *ptr, size_t size);
 
 
 int usbdrv_modeswitchHandle(usbdrv_devinfo_t *dev, const usbdrv_modeswitch_t *mode);

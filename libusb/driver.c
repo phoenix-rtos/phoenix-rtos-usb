@@ -14,6 +14,7 @@
 #include <errno.h>
 #include <usbdriver.h>
 #include <sys/msg.h>
+#include <sys/mman.h>
 #include <string.h>
 #include <unistd.h>
 
@@ -65,6 +66,71 @@ int usbdrv_eventsWait(int port, msg_t *msg)
 
 	return 0;
 }
+
+
+void *usbdrv_alloc(size_t size)
+{
+	msg_t msg = { 0 };
+	usbdrv_msg_t *umsg = (usbdrv_msg_t *)msg.i.raw;
+	usbdrv_out_alloc_t *out = (usbdrv_out_alloc_t *)msg.o.raw;
+	addr_t physaddr, offset;
+	void *vaddr;
+	int ret;
+
+	msg.type = mtDevCtl;
+	umsg->type = usbdrv_msg_alloc;
+	umsg->alloc.size = size;
+
+	if ((ret = msgSend(usbdrv_common.port, &msg)) != 0) {
+		return NULL;
+	}
+
+	physaddr = out->physaddr;
+	if (physaddr == 0) {
+		return NULL;
+	}
+
+	offset = physaddr % _PAGE_SIZE;
+
+	/* size should be a multiple of a page size */
+	size = (size + (_PAGE_SIZE - 1)) & ~(_PAGE_SIZE - 1);
+
+	/* physical address must be aligned to a page size */
+	physaddr -= offset;
+
+	/* TODO: Check if we have already mapped this page */
+	vaddr = mmap(NULL, size, PROT_WRITE | PROT_READ, MAP_UNCACHED, OID_PHYSMEM, physaddr);
+	if (vaddr == MAP_FAILED) {
+		usbdrv_free(out->physaddr, size);
+		return NULL;
+	}
+
+	vaddr = (void *)((addr_t)vaddr + offset);
+
+	return vaddr;
+}
+
+
+void usbdrv_free(void *ptr, size_t size)
+{
+	msg_t msg = { 0 };
+	usbdrv_msg_t *umsg = (usbdrv_msg_t *)msg.i.raw;
+
+	msg.type = mtDevCtl;
+	umsg->type = usbdrv_msg_free;
+	umsg->free.physaddr = va2pa(ptr);
+	umsg->free.size = size;
+	msgSend(usbdrv_common.port, &msg);
+
+	/* size should be a multiple of a page size */
+	size = (size + (_PAGE_SIZE - 1)) & ~(_PAGE_SIZE - 1);
+
+	/* address must be aligned to a page size */
+	ptr = (void *)((addr_t)ptr & ~(_PAGE_SIZE - 1));
+
+	munmap(ptr, size);
+}
+
 
 
 int usbdrv_open(usbdrv_devinfo_t *dev, usb_transfer_type_t type, usb_dir_t dir)
