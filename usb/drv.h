@@ -62,7 +62,7 @@ int usb_handleUrb(msg_t *msg, unsigned int port, unsigned long rid);
 int usb_handleConnect(msg_t *msg, usbdrv_connect_t *c);
 
 
-void usb_handleAlloc(msg_t *msg, usbdrv_in_alloc_t *inalloc);
+int usb_handleAlloc(usbdrv_in_alloc_t *inalloc, usbdrv_out_alloc_t *outalloc, pid_t pid);
 
 
 void usb_handleFree(msg_t *msg, usbdrv_in_free_t *infree);

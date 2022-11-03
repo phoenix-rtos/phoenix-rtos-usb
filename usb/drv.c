@@ -360,7 +360,7 @@ static void _usb_pipeFree(usb_drv_t *drv, usb_pipe_t *pipe)
 int usb_drvUnbind(usb_drv_t *drv, usb_dev_t *dev, int iface)
 {
 	msg_t msg = { 0 };
-	usbdrv_msg_t *umsg = (usbdrv_msg_t *)msg.i.raw;
+	usbdrv_in_msg_t *umsg = (usbdrv_in_msg_t *)msg.i.raw;
 	usb_pipe_t *pipe;
 	rbnode_t *n, *nn;
 
@@ -391,7 +391,7 @@ int usb_drvBind(usb_dev_t *dev)
 {
 	usb_drv_t *drv;
 	msg_t msg = { 0 };
-	usbdrv_msg_t *umsg = (usbdrv_msg_t *)msg.i.raw;
+	usbdrv_in_msg_t *umsg = (usbdrv_in_msg_t *)msg.i.raw;
 	int i;
 
 	msg.type = mtDevCtl;
@@ -522,7 +522,7 @@ static int _usb_urbSubmit(usb_transfer_t *t, usb_pipe_t *pipe)
 
 static int _usb_handleUrbcmd(msg_t *msg)
 {
-	usbdrv_msg_t *umsg = (usbdrv_msg_t *)msg->i.raw;
+	usbdrv_in_msg_t *umsg = (usbdrv_in_msg_t *)msg->i.raw;
 	usbdrv_urbcmd_t *urbcmd = &umsg->urbcmd;
 	usb_transfer_t *t;
 	usb_pipe_t *pipe;
@@ -583,7 +583,7 @@ int usb_handleUrbcmd(msg_t *msg)
 
 static int _usb_handleUrb(msg_t *msg, unsigned int port, unsigned long rid)
 {
-	usbdrv_msg_t *umsg = (usbdrv_msg_t *)msg->i.raw;
+	usbdrv_in_msg_t *umsg = (usbdrv_in_msg_t *)msg->i.raw;
 	usbdrv_urb_t *urb = &umsg->urb;
 	usb_drv_t *drv;
 	usb_transfer_t *t;
@@ -726,24 +726,30 @@ static void _usb_chunkFree(usb_drv_t *drv, addr_t physaddr, size_t size)
 }
 
 
-void usb_handleAlloc(msg_t *msg, usbdrv_in_alloc_t *inalloc)
+int usb_handleAlloc(usbdrv_in_alloc_t *inalloc, usbdrv_out_alloc_t *outalloc, pid_t pid)
 {
-	usbdrv_out_alloc_t *outalloc = (usbdrv_out_alloc_t *)msg->o.raw;
 	usb_drv_t *drv;
 	addr_t physaddr;
+	int ret = 0;
 
 	mutexLock(usbdrv_common.lock);
-	drv = _usb_drvFind(msg->pid);
+	drv = _usb_drvFind(pid);
 	if (drv == NULL) {
 		/* Unknown driver */
 		physaddr = 0;
+		ret = -EINVAL;
 	}
 	else {
 		physaddr = _usb_chunkAlloc(drv, inalloc->size);
+		if (physaddr == 0) {
+			ret = -ENOMEM;
+		}
 	}
 	mutexUnlock(usbdrv_common.lock);
 
 	outalloc->physaddr = physaddr;
+
+	return ret;
 }
 
 

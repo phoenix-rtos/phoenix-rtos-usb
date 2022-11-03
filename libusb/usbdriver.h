@@ -62,13 +62,30 @@ typedef struct {
 
 
 typedef struct {
+	int id;
 	int bus;
 	int dev;
 	int iface;
 	unsigned locationID;
 	usb_transfer_type_t type;
 	usb_dir_t dir;
-} usbdrv_open_t;
+} usbdrv_pipe_t;
+
+
+typedef struct {
+	int bus;
+	int dev;
+	int iface;
+	unsigned locationID;
+	usb_transfer_type_t type;
+	usb_dir_t dir;
+} usbdrv_in_open_t;
+
+
+typedef struct {
+	unsigned int id;
+	int err;
+} usbdrv_out_open_t;
 
 
 typedef struct {
@@ -80,7 +97,7 @@ typedef struct {
 	int dev;
 	int interface;
 	unsigned locationID;
-} usbdrv_devinfo_t;
+} usbdrv_dev_t;
 
 
 typedef struct {
@@ -109,6 +126,7 @@ typedef struct {
 
 typedef struct {
 	addr_t physaddr;
+	int err;
 } usbdrv_out_alloc_t;
 
 
@@ -144,12 +162,20 @@ typedef struct {
 		usbdrv_connect_t connect;
 		usbdrv_urb_t urb;
 		usbdrv_urbcmd_t urbcmd;
-		usbdrv_open_t open;
-		usbdrv_devinfo_t insertion;
+		usbdrv_in_open_t open;
+		usbdrv_dev_t insertion;
 		usbdrv_deletion_t deletion;
 		usbdrv_completion_t completion;
 	};
-} usbdrv_msg_t;
+} usbdrv_in_msg_t;
+
+typedef struct {
+	union {
+		usbdrv_out_alloc_t alloc;
+		usbdrv_out_open_t open;
+	};
+	int err;
+} usbdrv_out_msg_t;
 
 
 typedef struct {
@@ -166,8 +192,14 @@ void *usbdrv_alloc(size_t size);
 /* Frees memory used for usb transfers. The caller must ensure there is no ongoing URB using this memory chunk */
 void usbdrv_free(void *ptr, size_t size);
 
+/* Opens a pipe to communicate with an endpoint with given type and dir. If such an endpoint does not exist on the device, returns NULL */
+usbdrv_pipe_t *usbdrv_pipeOpen(usbdrv_dev_t *dev, usb_transfer_type_t type, usb_dir_t dir);
 
-int usbdrv_modeswitchHandle(usbdrv_devinfo_t *dev, const usbdrv_modeswitch_t *mode);
+/* Closes a previously opened pipe. It cancels all the ongoing urbs on this pipe */
+void usbdrv_pipeClose(usbdrv_pipe_t *pipe);
+
+
+int usbdrv_modeswitchHandle(usbdrv_dev_t *dev, const usbdrv_modeswitch_t *mode);
 
 
 const usbdrv_modeswitch_t *usbdrv_modeswitchFind(uint16_t vid, uint16_t pid, const usbdrv_modeswitch_t *modes, int nmodes);
@@ -179,28 +211,25 @@ int usbdrv_connect(const usbdrv_devid_t *filters, int nfilters, unsigned drvport
 int usbdrv_eventsWait(int port, msg_t *msg);
 
 
-int usbdrv_open(usbdrv_devinfo_t *dev, usb_transfer_type_t type, usb_dir_t dir);
+int usbdrv_transferControl(usbdrv_pipe_t *pipe, usb_setup_packet_t *setup, void *data, size_t size, usb_dir_t dir);
 
 
-int usbdrv_transferControl(unsigned pipe, usb_setup_packet_t *setup, void *data, size_t size, usb_dir_t dir);
+int usbdrv_transferBulk(usbdrv_pipe_t *pipe, void *data, size_t size, usb_dir_t dir);
 
 
-int usbdrv_transferBulk(unsigned pipe, void *data, size_t size, usb_dir_t dir);
+int usbdrv_transferAsync(usbdrv_pipe_t *pipe, unsigned urbid, size_t size, usb_setup_packet_t *setup);
 
 
-int usbdrv_transferAsync(unsigned pipe, unsigned urbid, size_t size, usb_setup_packet_t *setup);
+int usbdrv_setConfiguration(usbdrv_pipe_t *pipe, int conf);
 
 
-int usbdrv_setConfiguration(unsigned pipe, int conf);
+int usbdrv_urbAlloc(usbdrv_pipe_t *pipe, void *data, usb_dir_t dir, size_t size, int type);
 
 
-int usbdrv_urbAlloc(unsigned pipe, void *data, usb_dir_t dir, size_t size, int type);
+int usbdrv_urbFree(usbdrv_pipe_t *pipe, unsigned urb);
 
 
-int usbdrv_urbFree(unsigned pipe, unsigned urb);
-
-
-int usbdrv_clearFeatureHalt(unsigned pipe, int ep);
+int usbdrv_clearFeatureHalt(usbdrv_pipe_t *pipe, int ep);
 
 
 void usbdrv_dumpDeviceDescriptor(FILE *stream, usb_device_desc_t *descr);

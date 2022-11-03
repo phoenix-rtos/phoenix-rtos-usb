@@ -16,6 +16,7 @@
 #include <sys/msg.h>
 #include <sys/mman.h>
 #include <string.h>
+#include <stdlib.h>
 #include <unistd.h>
 
 
@@ -27,7 +28,7 @@ static struct {
 int usbdrv_connect(const usbdrv_devid_t *filters, int nfilters, unsigned drvport)
 {
 	msg_t msg = { 0 };
-	usbdrv_msg_t *umsg = (usbdrv_msg_t *)&msg.i.raw;
+	usbdrv_in_msg_t *umsg = (usbdrv_in_msg_t *)&msg.i.raw;
 	oid_t oid;
 
 	while (lookup("/dev/usb", NULL, &oid) < 0)
@@ -68,59 +69,22 @@ int usbdrv_eventsWait(int port, msg_t *msg)
 }
 
 
-void *usbdrv_alloc(size_t size)
+static void usbdrv_freeMsg(addr_t physaddr, size_t size)
 {
 	msg_t msg = { 0 };
-	usbdrv_msg_t *umsg = (usbdrv_msg_t *)msg.i.raw;
-	usbdrv_out_alloc_t *out = (usbdrv_out_alloc_t *)msg.o.raw;
-	addr_t physaddr, offset;
-	void *vaddr;
-	int ret;
+	usbdrv_in_msg_t *imsg = (usbdrv_in_msg_t *)msg.i.raw;
 
 	msg.type = mtDevCtl;
-	umsg->type = usbdrv_msg_alloc;
-	umsg->alloc.size = size;
-
-	if ((ret = msgSend(usbdrv_common.port, &msg)) != 0) {
-		return NULL;
-	}
-
-	physaddr = out->physaddr;
-	if (physaddr == 0) {
-		return NULL;
-	}
-
-	offset = physaddr % _PAGE_SIZE;
-
-	/* size should be a multiple of a page size */
-	size = (size + (_PAGE_SIZE - 1)) & ~(_PAGE_SIZE - 1);
-
-	/* physical address must be aligned to a page size */
-	physaddr -= offset;
-
-	/* TODO: Check if we have already mapped this page */
-	vaddr = mmap(NULL, size, PROT_WRITE | PROT_READ, MAP_UNCACHED, OID_PHYSMEM, physaddr);
-	if (vaddr == MAP_FAILED) {
-		usbdrv_free(out->physaddr, size);
-		return NULL;
-	}
-
-	vaddr = (void *)((addr_t)vaddr + offset);
-
-	return vaddr;
+	imsg->type = usbdrv_msg_free;
+	imsg->free.physaddr = physaddr;
+	imsg->free.size = size;
+	msgSend(usbdrv_common.port, &msg);
 }
 
 
 void usbdrv_free(void *ptr, size_t size)
 {
-	msg_t msg = { 0 };
-	usbdrv_msg_t *umsg = (usbdrv_msg_t *)msg.i.raw;
-
-	msg.type = mtDevCtl;
-	umsg->type = usbdrv_msg_free;
-	umsg->free.physaddr = va2pa(ptr);
-	umsg->free.size = size;
-	msgSend(usbdrv_common.port, &msg);
+	usbdrv_freeMsg(va2pa(ptr), size);
 
 	/* size should be a multiple of a page size */
 	size = (size + (_PAGE_SIZE - 1)) & ~(_PAGE_SIZE - 1);
@@ -132,34 +96,105 @@ void usbdrv_free(void *ptr, size_t size)
 }
 
 
-
-int usbdrv_open(usbdrv_devinfo_t *dev, usb_transfer_type_t type, usb_dir_t dir)
+void *usbdrv_alloc(size_t size)
 {
 	msg_t msg = { 0 };
-	usbdrv_msg_t *umsg = (usbdrv_msg_t *)msg.i.raw;
+	usbdrv_in_msg_t *imsg = (usbdrv_in_msg_t *)msg.i.raw;
+	usbdrv_out_msg_t *omsg = (usbdrv_out_msg_t *)msg.o.raw;
+	addr_t physaddr, offset;
+	void *vaddr;
 	int ret;
 
 	msg.type = mtDevCtl;
-	umsg->type = usbdrv_msg_open;
+	imsg->type = usbdrv_msg_alloc;
+	imsg->alloc.size = size;
 
-	umsg->open.bus = dev->bus;
-	umsg->open.dev = dev->dev;
-	umsg->open.iface = dev->interface;
-	umsg->open.type = type;
-	umsg->open.dir = dir;
-	umsg->open.locationID = dev->locationID;
+	if ((ret = msgSend(usbdrv_common.port, &msg)) != 0) {
+		return NULL;
+	}
 
-	if ((ret = msgSend(usbdrv_common.port, &msg)) != 0)
-		return ret;
+	if (omsg->err != 0) {
+		return NULL;
+	}
 
-	return *(int *)msg.o.raw;
+	physaddr = omsg->alloc.physaddr;
+	offset = physaddr % _PAGE_SIZE;
+
+	/* size should be a multiple of a page size */
+	size = (size + (_PAGE_SIZE - 1)) & ~(_PAGE_SIZE - 1);
+
+	/* physical address must be aligned to a page size */
+	physaddr -= offset;
+
+	/* TODO: Check if we have already mapped this page */
+	vaddr = mmap(NULL, size, PROT_WRITE | PROT_READ, MAP_UNCACHED, OID_PHYSMEM, physaddr);
+	if (vaddr == MAP_FAILED) {
+		usbdrv_freeMsg(omsg->alloc.physaddr, size);
+		return NULL;
+	}
+
+	vaddr = (void *)((addr_t)vaddr + offset);
+
+	return vaddr;
+}
+
+
+static void usbdrv_pipeCloseMsg(int pipeid)
+{
+
+}
+
+
+void usbdrv_pipeClose(usbdrv_pipe_t *pipe)
+{
+	free(pipe);
+	/* TODO: Send close message */
+}
+
+
+usbdrv_pipe_t *usbdrv_pipeOpen(usbdrv_dev_t *dev, usb_transfer_type_t type, usb_dir_t dir)
+{
+	msg_t msg = { 0 };
+	usbdrv_in_msg_t *imsg = (usbdrv_in_msg_t *)msg.i.raw;
+	usbdrv_out_msg_t *omsg = (usbdrv_out_msg_t *)msg.o.raw;
+	usbdrv_pipe_t *pipe;
+	int ret;
+
+	msg.type = mtDevCtl;
+	imsg->type = usbdrv_msg_open;
+
+	imsg->open.bus = dev->bus;
+	imsg->open.dev = dev->dev;
+	imsg->open.iface = dev->interface;
+	imsg->open.type = type;
+	imsg->open.dir = dir;
+	imsg->open.locationID = dev->locationID;
+
+	ret = msgSend(usbdrv_common.port, &msg);
+	if (ret != 0 || omsg->err < 0) {
+		return NULL;
+	}
+
+	pipe = malloc(sizeof(usbdrv_pipe_t));
+	if (pipe == NULL) {
+		usbdrv_pipeCloseMsg(omsg->open.id);
+		return NULL;
+	}
+
+	pipe->bus = dev->bus;
+	pipe->dev = dev->dev;
+	pipe->iface = dev->interface;
+	pipe->locationID = dev->locationID;
+	pipe->id = omsg->open.id;
+
+	return pipe;
 }
 
 
 static int usbdrv_urbSubmitSync(usbdrv_urb_t *urb, void *data)
 {
 	msg_t msg = { 0 };
-	usbdrv_msg_t *umsg = (usbdrv_msg_t *)msg.i.raw;
+	usbdrv_in_msg_t *umsg = (usbdrv_in_msg_t *)msg.i.raw;
 	int ret;
 
 	msg.type = mtDevCtl;
@@ -183,10 +218,10 @@ static int usbdrv_urbSubmitSync(usbdrv_urb_t *urb, void *data)
 }
 
 
-int usbdrv_transferControl(unsigned pipe, usb_setup_packet_t *setup, void *data, size_t size, usb_dir_t dir)
+int usbdrv_transferControl(usbdrv_pipe_t *pipe, usb_setup_packet_t *setup, void *data, size_t size, usb_dir_t dir)
 {
 	usbdrv_urb_t urb = {
-		.pipe = pipe,
+		.pipe = pipe->id,
 		.setup = *setup,
 		.dir = dir,
 		.size = size,
@@ -198,10 +233,10 @@ int usbdrv_transferControl(unsigned pipe, usb_setup_packet_t *setup, void *data,
 }
 
 
-int usbdrv_transferBulk(unsigned pipe, void *data, size_t size, usb_dir_t dir)
+int usbdrv_transferBulk(usbdrv_pipe_t *pipe, void *data, size_t size, usb_dir_t dir)
 {
 	usbdrv_urb_t urb = {
-		.pipe = pipe,
+		.pipe = pipe->id,
 		.dir = dir,
 		.size = size,
 		.type = usb_transfer_bulk,
@@ -212,7 +247,7 @@ int usbdrv_transferBulk(unsigned pipe, void *data, size_t size, usb_dir_t dir)
 }
 
 
-int usbdrv_setConfiguration(unsigned pipe, int conf)
+int usbdrv_setConfiguration(usbdrv_pipe_t *pipe, int conf)
 {
 	usb_setup_packet_t setup = (usb_setup_packet_t) {
 		.bmRequestType = REQUEST_DIR_HOST2DEV | REQUEST_TYPE_STANDARD | REQUEST_RECIPIENT_DEVICE,
@@ -226,7 +261,7 @@ int usbdrv_setConfiguration(unsigned pipe, int conf)
 }
 
 
-int usbdrv_clearFeatureHalt(unsigned pipe, int ep)
+int usbdrv_clearFeatureHalt(usbdrv_pipe_t *pipe, int ep)
 {
 	usb_setup_packet_t setup = (usb_setup_packet_t) {
 		.bmRequestType = REQUEST_DIR_HOST2DEV | REQUEST_TYPE_STANDARD | REQUEST_RECIPIENT_DEVICE,
@@ -240,14 +275,14 @@ int usbdrv_clearFeatureHalt(unsigned pipe, int ep)
 }
 
 
-int usbdrv_urbAlloc(unsigned pipe, void *data, usb_dir_t dir, size_t size, int type)
+int usbdrv_urbAlloc(usbdrv_pipe_t *pipe, void *data, usb_dir_t dir, size_t size, int type)
 {
 	msg_t msg = { 0 };
-	usbdrv_msg_t *umsg = (usbdrv_msg_t *)msg.i.raw;
+	usbdrv_in_msg_t *umsg = (usbdrv_in_msg_t *)msg.i.raw;
 	int ret;
 	usbdrv_urb_t *urb = &umsg->urb;
 
-	urb->pipe = pipe;
+	urb->pipe = pipe->id;
 	urb->type = type;
 	urb->dir = dir;
 	urb->size = size;
@@ -264,14 +299,14 @@ int usbdrv_urbAlloc(unsigned pipe, void *data, usb_dir_t dir, size_t size, int t
 }
 
 
-int usbdrv_transferAsync(unsigned pipe, unsigned urbid, size_t size, usb_setup_packet_t *setup)
+int usbdrv_transferAsync(usbdrv_pipe_t *pipe, unsigned urbid, size_t size, usb_setup_packet_t *setup)
 {
 	msg_t msg = { 0 };
-	usbdrv_msg_t *umsg = (usbdrv_msg_t *)msg.i.raw;
+	usbdrv_in_msg_t *umsg = (usbdrv_in_msg_t *)msg.i.raw;
 	int ret;
 	usbdrv_urbcmd_t *urbcmd = &umsg->urbcmd;
 
-	urbcmd->pipeid = pipe;
+	urbcmd->pipeid = pipe->id;
 	urbcmd->size = size;
 	urbcmd->urbid = urbid;
 	urbcmd->cmd = urbcmd_submit;
@@ -288,14 +323,14 @@ int usbdrv_transferAsync(unsigned pipe, unsigned urbid, size_t size, usb_setup_p
 }
 
 
-int usbdrv_urbFree(unsigned pipe, unsigned urb)
+int usbdrv_urbFree(usbdrv_pipe_t *pipe, unsigned urb)
 {
 	msg_t msg = { 0 };
-	usbdrv_msg_t *umsg = (usbdrv_msg_t *)msg.i.raw;
+	usbdrv_in_msg_t *umsg = (usbdrv_in_msg_t *)msg.i.raw;
 	int ret;
 	usbdrv_urbcmd_t *urbcmd = &umsg->urbcmd;
 
-	urbcmd->pipeid = pipe;
+	urbcmd->pipeid = pipe->id;
 	urbcmd->urbid = urb;
 	urbcmd->cmd = urbcmd_free;
 
@@ -355,18 +390,7 @@ void usbdrv_dumpConfigurationDescriptor(FILE *stream, usb_configuration_desc_t *
 }
 
 
-void usbdrv_dumpInferfaceDesc(FILE *stream, usb_interface_desc_t *descr)
-{
-	fprintf(stream, "INTERFACE DESCRIPTOR:\n");
-	fprintf(stream, "\tbLength: %d\n", descr->bLength);
-	fprintf(stream, "\tbDescriptorType: 0x%x\n", descr->bDescriptorType);
-	fprintf(stream, "\tbInterfaceNumber: %d\n", descr->bInterfaceNumber);
-	fprintf(stream, "\tbNumEndpoints: %d\n", descr->bNumEndpoints);
-	fprintf(stream, "\tbInterfaceClass: %x\n", descr->bInterfaceClass);
-	fprintf(stream, "\tbInterfaceSubClass: 0x%x\n", descr->bInterfaceSubClass);
-	fprintf(stream, "\tbInterfaceProtocol: 0x%x\n", descr->bInterfaceProtocol);
-	fprintf(stream, "\tiInterface: %d\n", descr->iInterface);
-}
+
 
 
 void usbdrv_dumpEndpointDesc(FILE *stream, usb_endpoint_desc_t *descr)
@@ -390,21 +414,21 @@ void usbdrv_dumpStringDesc(FILE *stream, usb_string_desc_t *descr)
 }
 
 
-int usbdrv_modeswitchHandle(usbdrv_devinfo_t *dev, const usbdrv_modeswitch_t *mode)
+int usbdrv_modeswitchHandle(usbdrv_dev_t *dev, const usbdrv_modeswitch_t *mode)
 {
 	char msg[sizeof(mode->msg)];
-	int pipeCtrl, pipeIn, pipeOut;
+	usbdrv_pipe_t *pipeCtrl, *pipeIn, *pipeOut;
 
-	if ((pipeCtrl = usbdrv_open(dev, usb_transfer_control, 0)) < 0)
+	if ((pipeCtrl = usbdrv_pipeOpen(dev, usb_transfer_control, 0)) < 0)
 		return -EINVAL;
 
 	if (usbdrv_setConfiguration(pipeCtrl, 1) != 0)
 		return -EINVAL;
 
-	if ((pipeIn = usbdrv_open(dev, usb_transfer_bulk, usb_dir_in)) < 0)
+	if ((pipeIn = usbdrv_pipeOpen(dev, usb_transfer_bulk, usb_dir_in)) < 0)
 		return -EINVAL;
 
-	if ((pipeOut = usbdrv_open(dev, usb_transfer_bulk, usb_dir_out)) < 0)
+	if ((pipeOut = usbdrv_pipeOpen(dev, usb_transfer_bulk, usb_dir_out)) < 0)
 		return -EINVAL;
 
 	memcpy(msg, mode->msg, sizeof(msg));

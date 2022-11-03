@@ -137,26 +137,28 @@ static int usb_devsList(char *buffer, size_t size)
 }
 
 
-static int usb_handleOpen(usbdrv_open_t *o, msg_t *msg)
+static int usb_handleOpen(usbdrv_in_open_t *inopen, usbdrv_out_open_t *outopen, pid_t pid)
 {
 	usb_drv_t *drv;
-	int pipe;
+	int pipeid;
 	hcd_t *hcd;
 
-	if ((drv = usb_drvFind(msg->pid)) == NULL) {
-		USB_LOG("usb: Fail to find driver pid: %d\n", msg->pid);
+	drv = usb_drvFind(pid);
+	if (drv == NULL) {
 		return -EINVAL;
 	}
 
-	if ((hcd = hcd_find(usb_common.hcds, o->locationID)) == NULL) {
-		USB_LOG("usb: Fail to find dev: %d\n", o->dev);
+	hcd = hcd_find(usb_common.hcds, inopen->locationID);
+	if (hcd == NULL) {
 		return -EINVAL;
 	}
 
-	if ((pipe = usb_drvPipeOpen(drv, hcd, o->locationID, o->iface, o->dir, o->type)) < 0)
+	pipeid = usb_drvPipeOpen(drv, hcd, inopen->locationID, inopen->iface, inopen->dir, inopen->type);
+	if (pipeid < 0) {
 		return -EINVAL;
+	}
 
-	*(int *)msg->o.raw = pipe;
+	outopen->id = pipeid;
 
 	return 0;
 }
@@ -165,7 +167,7 @@ static int usb_handleOpen(usbdrv_open_t *o, msg_t *msg)
 static void usb_urbAsyncCompleted(usb_transfer_t *t)
 {
 	msg_t msg = { 0 };
-	usbdrv_msg_t *umsg = (usbdrv_msg_t *)&msg.i.raw;
+	usbdrv_in_msg_t *umsg = (usbdrv_in_msg_t *)&msg.i.raw;
 	usbdrv_completion_t *c = &umsg->completion;
 
 	umsg->type = usbdrv_msg_completion;
@@ -229,7 +231,8 @@ static void usb_msgthr(void *arg)
 	unsigned port = (int)arg;
 	unsigned long rid;
 	msg_t msg;
-	usbdrv_msg_t *umsg;
+	usbdrv_in_msg_t *imsg;
+	usbdrv_out_msg_t *omsg;
 	int resp;
 	int ret;
 
@@ -242,24 +245,25 @@ static void usb_msgthr(void *arg)
 				msg.o.io.err = usb_devsList(msg.o.data, msg.o.size);
 				break;
 			case mtDevCtl:
-				umsg = (usbdrv_msg_t *)msg.i.raw;
-				switch (umsg->type) {
+				imsg = (usbdrv_in_msg_t *)msg.i.raw;
+				omsg = (usbdrv_out_msg_t *)msg.o.raw;
+				switch (imsg->type) {
 					case usbdrv_msg_alloc:
-						usb_handleAlloc(&msg, &umsg->alloc);
+						omsg->err = usb_handleAlloc(&imsg->alloc, &omsg->alloc, msg.pid);
 						break;
 					case usbdrv_msg_free:
-						usb_handleFree(&msg, &umsg->free);
+						usb_handleFree(&msg, &imsg->free);
+						omsg->err = 0;
 						break;
 					case usbdrv_msg_connect:
-						msg.o.io.err = usb_handleConnect(&msg, &umsg->connect);
+						omsg->err = usb_handleConnect(&msg, &imsg->connect);
 						break;
 					case usbdrv_msg_open:
-						if (usb_handleOpen(&umsg->open, &msg) != 0)
-							msg.o.io.err = -1;
+						omsg->err = usb_handleOpen(&imsg->open, &omsg->open, msg.pid);
 						break;
 					case usbdrv_msg_urb:
 						ret = usb_handleUrb(&msg, port, rid);
-						if (umsg->urb.sync && ret == 0) {
+						if (imsg->urb.sync && ret == 0) {
 							/* Block the sender until the transfer finishes */
 							resp = 0;
 						}
@@ -272,7 +276,7 @@ static void usb_msgthr(void *arg)
 						break;
 					default:
 						msg.o.io.err = -EINVAL;
-						USB_LOG("usb: unsupported usb_msg type: %d\n", umsg->type);
+						USB_LOG("usb: unsupported usb_msg type: %d\n", imsg->type);
 						break;
 				}
 				break;
