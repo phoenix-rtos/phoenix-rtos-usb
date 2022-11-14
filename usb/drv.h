@@ -35,7 +35,7 @@ int usb_drvUnbind(usb_drv_t *drv, usb_dev_t *dev, int iface);
 int usb_drvInit(void);
 
 
-int usb_drvPipeOpen(usb_drv_t *drv, hcd_t *hcd, int locationID, int iface, int dir, int type);
+int usb_drvPipeOpen(usb_drv_t *drv, hcd_t *hcd, int locationID, int iface, int dir, int type, unsigned int *epnum);
 
 
 usb_pipe_t *usb_pipeOpen(usb_dev_t *dev, int iface, int dir, int type);
@@ -56,10 +56,10 @@ int usb_drvTransferAsync(usb_drv_t *drv, int urbid, int pipeid);
 int usb_handleUrbcmd(msg_t *msg);
 
 
-int usb_handleUrb(msg_t *msg, unsigned int port, unsigned long rid);
+int usb_handleSubmit(msg_t *msg, unsigned int port, unsigned long rid);
 
 
-int usb_handleConnect(msg_t *msg, usbdrv_connect_t *c);
+int usb_handleConnect(msg_t *msg, usbdrv_in_connect_t *c);
 
 
 int usb_handleAlloc(usbdrv_in_alloc_t *inalloc, usbdrv_out_alloc_t *outalloc, pid_t pid);
@@ -67,5 +67,7 @@ int usb_handleAlloc(usbdrv_in_alloc_t *inalloc, usbdrv_out_alloc_t *outalloc, pi
 
 void usb_handleFree(msg_t *msg, usbdrv_in_free_t *infree);
 
+
+int usb_handleUrballoc(msg_t *msg, unsigned int port, unsigned long rid);
 
 #endif /* _USB_DRV_H_ */

@@ -53,6 +53,19 @@ struct {
 } usbdrv_common;
 
 
+void usbdrv_dumpInferfaceDesc(FILE *stream, usb_interface_desc_t *descr)
+{
+	fprintf(stream, "INTERFACE DESCRIPTOR:\n");
+	fprintf(stream, "\tbLength: %d\n", descr->bLength);
+	fprintf(stream, "\tbDescriptorType: 0x%x\n", descr->bDescriptorType);
+	fprintf(stream, "\tbInterfaceNumber: %d\n", descr->bInterfaceNumber);
+	fprintf(stream, "\tbNumEndpoints: %d\n", descr->bNumEndpoints);
+	fprintf(stream, "\tbInterfaceClass: %x\n", descr->bInterfaceClass);
+	fprintf(stream, "\tbInterfaceSubClass: 0x%x\n", descr->bInterfaceSubClass);
+	fprintf(stream, "\tbInterfaceProtocol: 0x%x\n", descr->bInterfaceProtocol);
+	fprintf(stream, "\tiInterface: %d\n", descr->iInterface);
+}
+
 static int usb_chunkcmp(rbnode_t *n1, rbnode_t *n2)
 {
 	struct usb_chunk *c1 = lib_treeof(struct usb_chunk, linkage, n1);
@@ -67,6 +80,37 @@ static int usb_chunkcmp(rbnode_t *n1, rbnode_t *n2)
 	else {
 		return -1;
 	}
+}
+
+
+static struct usb_chunk *_usb_chunkFind(usb_drv_t *drv, addr_t physaddr)
+{
+	struct usb_chunk find;
+	rbnode_t *rbnode;
+
+	find.physaddr = physaddr;
+	rbnode = lib_rbFind(&drv->chunks, &find.linkage);
+	if (rbnode == NULL) {
+		return NULL;
+	}
+
+	return lib_treeof(struct usb_chunk, linkage, rbnode);
+}
+
+
+static char *_usb_pa2va(usb_drv_t *drv, addr_t physaddr, addr_t offs)
+{
+	struct usb_chunk *chunk;
+	char *res;
+
+	chunk = _usb_chunkFind(drv, physaddr);
+	if (chunk == NULL) {
+		return NULL;
+	}
+
+	res = (char *)chunk->vaddr;
+
+	return res + offs;
 }
 
 
@@ -197,14 +241,16 @@ usb_pipe_t *usb_pipeOpen(usb_dev_t *dev, int iface, int dir, int type)
 }
 
 
-int usb_drvPipeOpen(usb_drv_t *drv, hcd_t *hcd, int locationID, int iface, int dir, int type)
+int usb_drvPipeOpen(usb_drv_t *drv, hcd_t *hcd, int locationID, int iface, int dir, int type, unsigned int *epnum)
 {
 	usb_pipe_t *pipe = NULL;
 	int pipeId = -1;
 
 	mutexLock(usbdrv_common.lock);
-	if ((pipe = _usb_drvPipeOpen(drv, hcd, locationID, iface, dir, type)) != NULL)
+	if ((pipe = _usb_drvPipeOpen(drv, hcd, locationID, iface, dir, type)) != NULL) {
 		pipeId = pipe->linkage.id;
+		*epnum = pipe->num;
+	}
 	mutexUnlock(usbdrv_common.lock);
 
 	return pipeId;
@@ -457,7 +503,7 @@ static void usb_drvAdd(usb_drv_t *drv)
 }
 
 
-static usb_transfer_t *usb_transferAlloc(int sync, int type, usb_setup_packet_t *setup, usb_dir_t dir, size_t size, char *buf)
+static usb_transfer_t *usb_transferAlloc(int sync, int type, usb_setup_packet_t *setup, usb_dir_t dir, size_t size, addr_t buf)
 {
 	usb_transfer_t *t;
 
@@ -472,10 +518,7 @@ static usb_transfer_t *usb_transferAlloc(int sync, int type, usb_setup_packet_t 
 	t->type = type;
 
 	if (size > 0) {
-		if ((t->buffer = usb_alloc(t->size)) == NULL) {
-			free(t);
-			return NULL;
-		}
+		t->buffer = buf;
 	}
 
 	if (type == usb_transfer_control) {
@@ -487,9 +530,6 @@ static usb_transfer_t *usb_transferAlloc(int sync, int type, usb_setup_packet_t 
 		}
 		memcpy(t->setup, setup, sizeof(usb_setup_packet_t));
 	}
-
-	if (dir == usb_dir_out && size > 0)
-		memcpy(t->buffer, buf, t->size);
 
 	return t;
 }
@@ -503,13 +543,28 @@ void usb_transferFree(usb_transfer_t *t)
 }
 
 
-static int _usb_urbSubmit(usb_transfer_t *t, usb_pipe_t *pipe)
+static int _usb_urbSubmit(usb_transfer_t *t, usb_pipe_t *pipe, usb_drv_t *drv, addr_t physaddr, size_t size)
 {
+	char *buf;
+
 	if (t->state != urb_idle)
 		return -EBUSY;
 
 	t->state = urb_ongoing;
 	t->pipeid = usb_pipeid(pipe);
+
+	if (size > 0) {
+		buf = _usb_pa2va(drv, physaddr, 0);
+		if (buf == NULL) {
+			USB_LOG("usb: Unknown address\n");
+			return -EINVAL;
+		}
+		t->buffer = buf;
+		t->size = size;
+	}
+	else {
+		t->buffer = NULL;
+	}
 
 	if (usb_transferSubmit(t, pipe, NULL) < 0) {
 		t->state = urb_idle;
@@ -523,7 +578,7 @@ static int _usb_urbSubmit(usb_transfer_t *t, usb_pipe_t *pipe)
 static int _usb_handleUrbcmd(msg_t *msg)
 {
 	usbdrv_in_msg_t *umsg = (usbdrv_in_msg_t *)msg->i.raw;
-	usbdrv_urbcmd_t *urbcmd = &umsg->urbcmd;
+	usbdrv_in_urbcmd_t *urbcmd = &umsg->urbcmd;
 	usb_transfer_t *t;
 	usb_pipe_t *pipe;
 	usb_drv_t *drv;
@@ -543,10 +598,10 @@ static int _usb_handleUrbcmd(msg_t *msg)
 
 	switch (urbcmd->cmd) {
 		case urbcmd_submit:
-			if (t->type == usb_transfer_control) {
-				memcpy(t->setup, &urbcmd->setup, sizeof(urbcmd->setup));
-			}
-			ret = _usb_urbSubmit(t, pipe);
+			// if (t->type == usb_transfer_control) {
+			// 	memcpy(t->setup, &urbcmd->setup, sizeof(urbcmd->setup));
+			// }
+			ret = _usb_urbSubmit(t, pipe, drv, urbcmd->physaddr, urbcmd->size);
 			break;
 		case urbcmd_cancel:
 			ret = _usb_urbCancel(t, pipe);
@@ -581,12 +636,59 @@ int usb_handleUrbcmd(msg_t *msg)
 }
 
 
-static int _usb_handleUrb(msg_t *msg, unsigned int port, unsigned long rid)
+static int _usb_handleUrballoc(msg_t *msg, unsigned int port, unsigned long rid)
 {
-	usbdrv_in_msg_t *umsg = (usbdrv_in_msg_t *)msg->i.raw;
-	usbdrv_urb_t *urb = &umsg->urb;
+	usbdrv_in_msg_t *imsg = (usbdrv_in_msg_t *)msg->i.raw;
+	usbdrv_in_urballoc_t *urb = &imsg->urballoc;
+	usbdrv_out_msg_t *omsg = (usbdrv_out_msg_t *)msg->o.raw;
+	usbdrv_out_urballoc_t *outalloc = &omsg->urballoc;
 	usb_drv_t *drv;
 	usb_transfer_t *t;
+
+	drv = _usb_drvFind(msg->pid);
+	if (drv == NULL) {
+		USB_LOG("usb: driver pid %d does not exist!\n", msg->pid);
+		return -EINVAL;
+	}
+
+	t = usb_transferAlloc(0, urb->type, NULL, urb->dir, 0, NULL);
+	if (t == NULL) {
+		return -ENOMEM;
+	}
+
+	if (idtree_alloc(&drv->urbs, &t->linkage) < 0) {
+		usb_transferFree(t);
+		return -ENOMEM;
+	}
+
+	t->port = drv->port;
+	t->pipeid = urb->pipeid;
+	t->refcnt = 1;
+	outalloc->urbid = t->linkage.id;
+
+	return 0;
+}
+
+
+int usb_handleUrballoc(msg_t *msg, unsigned int port, unsigned long rid)
+{
+	int ret;
+
+	mutexLock(usbdrv_common.lock);
+	ret = _usb_handleUrballoc(msg, port, rid);
+	mutexUnlock(usbdrv_common.lock);
+
+	return ret;
+}
+
+
+static int _usb_handleSubmit(msg_t *msg, unsigned int port, unsigned long rid)
+{
+	usbdrv_in_msg_t *umsg = (usbdrv_in_msg_t *)msg->i.raw;
+	usbdrv_in_submit_t *submit = &umsg->submit;
+	usb_drv_t *drv;
+	usb_transfer_t *t;
+	char *buf = NULL;
 	int ret = 0;
 
 	if ((drv = _usb_drvFind(msg->pid)) == NULL) {
@@ -594,33 +696,42 @@ static int _usb_handleUrb(msg_t *msg, unsigned int port, unsigned long rid)
 		return -EINVAL;
 	}
 
-	t = usb_transferAlloc(urb->sync, urb->type, &urb->setup, urb->dir, urb->size, msg->i.data);
+	/* TODO: handle offs */
+	if (submit->physaddr != 0) {
+		buf = _usb_pa2va(drv, submit->physaddr, 0);
+		if (buf == NULL) {
+			USB_LOG("usb: Unknown address\n");
+			return -EINVAL;
+		}
+	}
+
+	t = usb_transferAlloc(1, submit->type, &submit->setup, submit->dir, submit->size, buf);
 	if (t == NULL)
 		return -ENOMEM;
 
 	t->port = drv->port;
-	t->pipeid = urb->pipe;
+	t->pipeid = submit->pipeid;
 
-	/* For async urbs only allocate resources. The transfer would be executed,
-	 * upon receiving usb_submit_t msg later */
-	if (!urb->sync) {
-		if (idtree_alloc(&drv->urbs, &t->linkage) < 0) {
-			usb_transferFree(t);
-			return -ENOMEM;
-		}
+	// /* For async urbs only allocate resources. The transfer would be executed,
+	//  * upon receiving usb_submit_t msg later */
+	// if (!submit->sync) {
+	// 	if (idtree_alloc(&drv->urbs, &t->linkage) < 0) {
+	// 		usb_transferFree(t);
+	// 		return -ENOMEM;
+	// 	}
 
-		t->refcnt = 1;
-		ret = t->linkage.id;
+	// 	t->refcnt = 1;
+	// 	ret = t->linkage.id;
+	// }
+	// else {
+	t->rid = rid;
+	t->pid = msg->pid;
+
+	if (_usb_drvTransfer(drv, t) < 0) {
+		usb_transferFree(t);
+		return -EINVAL;
 	}
-	else {
-		t->rid = rid;
-		t->pid = msg->pid;
-
-		if (_usb_drvTransfer(drv, t) < 0) {
-			usb_transferFree(t);
-			return -EINVAL;
-		}
-	}
+	// }
 
 	/* For async urbs, respond immediately and send usb_completion msg later.
 	 * For sync ones, block the sender, and respond later */
@@ -628,12 +739,12 @@ static int _usb_handleUrb(msg_t *msg, unsigned int port, unsigned long rid)
 }
 
 
-int usb_handleUrb(msg_t *msg, unsigned int port, unsigned long rid)
+int usb_handleSubmit(msg_t *msg, unsigned int port, unsigned long rid)
 {
 	int ret;
 
 	mutexLock(usbdrv_common.lock);
-	ret = _usb_handleUrb(msg, port, rid);
+	ret = _usb_handleSubmit(msg, port, rid);
 	mutexUnlock(usbdrv_common.lock);
 
 	return ret;
@@ -660,7 +771,7 @@ int usb_drvInit(void)
 	return 0;
 }
 
-int usb_handleConnect(msg_t *msg, usbdrv_connect_t *c)
+int usb_handleConnect(msg_t *msg, usbdrv_in_connect_t *c)
 {
 	usb_drv_t *drv;
 
@@ -697,6 +808,7 @@ static addr_t _usb_chunkAlloc(usb_drv_t *drv, size_t size)
 
 	physaddr = va2pa(ptr);
 
+	printf("usb_chunkAlloc: Mapping physaddr %x to vaddr: %p\n", physaddr, ptr);
 	chunk = malloc(sizeof(struct usb_chunk));
 	if (chunk == NULL) {
 		usb_free(ptr, size);
@@ -714,14 +826,13 @@ static addr_t _usb_chunkAlloc(usb_drv_t *drv, size_t size)
 
 static void _usb_chunkFree(usb_drv_t *drv, addr_t physaddr, size_t size)
 {
-	struct usb_chunk find, *chunk = NULL;
-	find.physaddr = physaddr;
+	struct usb_chunk *chunk;
 
-	chunk = lib_treeof(struct usb_chunk, linkage, lib_rbFind(&drv->chunks, &find.linkage));
+	chunk = _usb_chunkFind(drv, physaddr);
 	if (chunk != NULL) {
 		usb_free(chunk->vaddr, size);
 		lib_rbRemove(&drv->chunks, &chunk->linkage);
-		free(chunk);
+		free(chunk);		
 	}
 }
 

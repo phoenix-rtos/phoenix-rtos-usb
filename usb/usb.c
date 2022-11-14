@@ -27,7 +27,7 @@
 #include <stdlib.h>
 #include <unistd.h>
 
-#include <usbdriver.h>
+#include <usb_msg.h>
 
 #include "drv.h"
 #include "hcd.h"
@@ -35,8 +35,8 @@
 
 
 #define N_STATUSTHRS   1
-#define STATUSTHR_PRIO 3
-#define MSGTHR_PRIO    3
+#define STATUSTHR_PRIO 1
+#define MSGTHR_PRIO    1
 
 
 static struct {
@@ -141,6 +141,7 @@ static int usb_handleOpen(usbdrv_in_open_t *inopen, usbdrv_out_open_t *outopen, 
 {
 	usb_drv_t *drv;
 	int pipeid;
+	unsigned int epnum;
 	hcd_t *hcd;
 
 	drv = usb_drvFind(pid);
@@ -153,12 +154,13 @@ static int usb_handleOpen(usbdrv_in_open_t *inopen, usbdrv_out_open_t *outopen, 
 		return -EINVAL;
 	}
 
-	pipeid = usb_drvPipeOpen(drv, hcd, inopen->locationID, inopen->iface, inopen->dir, inopen->type);
+	pipeid = usb_drvPipeOpen(drv, hcd, inopen->locationID, inopen->iface, inopen->dir, inopen->type, &epnum);
 	if (pipeid < 0) {
 		return -EINVAL;
 	}
 
 	outopen->id = pipeid;
+	outopen->epnum = epnum;
 
 	return 0;
 }
@@ -261,9 +263,9 @@ static void usb_msgthr(void *arg)
 					case usbdrv_msg_open:
 						omsg->err = usb_handleOpen(&imsg->open, &omsg->open, msg.pid);
 						break;
-					case usbdrv_msg_urb:
-						ret = usb_handleUrb(&msg, port, rid);
-						if (imsg->urb.sync && ret == 0) {
+					case usbdrv_msg_submit:
+						ret = usb_handleSubmit(&msg, port, rid);
+						if (ret == 0) {
 							/* Block the sender until the transfer finishes */
 							resp = 0;
 						}
@@ -271,8 +273,13 @@ static void usb_msgthr(void *arg)
 							msg.o.io.err = ret;
 						}
 						break;
+					case usbdrv_msg_urballoc:
+						omsg->err = usb_handleUrballoc(&msg, port, rid);
+						break;
 					case usbdrv_msg_urbcmd:
 						msg.o.io.err = usb_handleUrbcmd(&msg);
+						break;
+					case usbdrv_msg_wait:
 						break;
 					default:
 						msg.o.io.err = -EINVAL;

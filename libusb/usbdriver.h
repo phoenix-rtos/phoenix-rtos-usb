@@ -22,8 +22,9 @@
 #include <sys/msg.h>
 #include <posix/idtree.h>
 
-#define USBDRV_ANY ((unsigned)-1)
-
+#define USBDRV_ANY             ((unsigned)-1)
+#define USBDRV_NO_TIMEOUT      0
+#define USBDRV_MAX_DEVNAME
 
 enum {
 	usbdrv_nomatch = 0x0,
@@ -46,18 +47,10 @@ typedef struct {
 
 
 typedef struct {
-	unsigned port;
-	unsigned nfilters;
-} usbdrv_connect_t;
-
-
-typedef struct {
-	int pipe;
-	int size;
-	usb_setup_packet_t setup;
-	usb_dir_t dir;
-	int type;
-	int sync;
+	rbnode_t node;
+	int id;
+	int pipeid;
+	char *vaddr;
 } usbdrv_urb_t;
 
 
@@ -66,6 +59,7 @@ typedef struct {
 	int bus;
 	int dev;
 	int iface;
+	int epnum;
 	unsigned locationID;
 	usb_transfer_type_t type;
 	usb_dir_t dir;
@@ -73,109 +67,16 @@ typedef struct {
 
 
 typedef struct {
-	int bus;
-	int dev;
-	int iface;
-	unsigned locationID;
-	usb_transfer_type_t type;
-	usb_dir_t dir;
-} usbdrv_in_open_t;
-
-
-typedef struct {
-	unsigned int id;
-	int err;
-} usbdrv_out_open_t;
-
-
-typedef struct {
-	usb_device_desc_t descriptor;
-	char manufacturer[32];
-	char product[32];
-	char serialNumber[32];
+	idnode_t node;
+	usbdrv_dev_t *prev;
+	usbdrv_dev_t *next;
+	volatile int refcnt;
 	int bus;
 	int dev;
 	int interface;
 	unsigned locationID;
+	void *ctx;
 } usbdrv_dev_t;
-
-
-typedef struct {
-	int bus;
-	int dev;
-	int interface;
-} usbdrv_deletion_t;
-
-
-typedef struct {
-	int pipeid;
-	int urbid;
-	size_t size;
-	usb_setup_packet_t setup;
-	enum {
-		urbcmd_submit,
-		urbcmd_cancel,
-		urbcmd_free } cmd;
-} usbdrv_urbcmd_t;
-
-
-typedef struct {
-	size_t size;
-} usbdrv_in_alloc_t;
-
-
-typedef struct {
-	addr_t physaddr;
-	int err;
-} usbdrv_out_alloc_t;
-
-
-typedef struct {
-	size_t size;
-	addr_t physaddr;
-} usbdrv_in_free_t;
-
-
-typedef struct {
-	int pipeid;
-	int urbid;
-	size_t transferred;
-	int err;
-} usbdrv_completion_t;
-
-
-typedef struct {
-	enum {
-		usbdrv_msg_alloc,
-		usbdrv_msg_free,
-		usbdrv_msg_connect,
-		usbdrv_msg_insertion,
-		usbdrv_msg_deletion,
-		usbdrv_msg_urb,
-		usbdrv_msg_open,
-		usbdrv_msg_urbcmd,
-		usbdrv_msg_completion } type;
-
-	union {
-		usbdrv_in_alloc_t alloc;
-		usbdrv_in_free_t free;
-		usbdrv_connect_t connect;
-		usbdrv_urb_t urb;
-		usbdrv_urbcmd_t urbcmd;
-		usbdrv_in_open_t open;
-		usbdrv_dev_t insertion;
-		usbdrv_deletion_t deletion;
-		usbdrv_completion_t completion;
-	};
-} usbdrv_in_msg_t;
-
-typedef struct {
-	union {
-		usbdrv_out_alloc_t alloc;
-		usbdrv_out_open_t open;
-	};
-	int err;
-} usbdrv_out_msg_t;
 
 
 typedef struct {
@@ -184,6 +85,22 @@ typedef struct {
 	uint8_t msg[31];
 	int scsiresp;
 } usbdrv_modeswitch_t;
+
+
+typedef int (*usbdrv_completion_handler_t)(usbdrv_dev_t *dev, usbdrv_urb_t *urb, char *data, size_t transferred, int status);
+
+
+typedef int (*usbdrv_insertion_handler_t)(usbdrv_dev_t *dev);
+
+
+typedef int (*usbdrv_deletion_handler_t)(usbdrv_dev_t *dev);
+
+
+typedef struct {
+	usbdrv_insertion_handler_t insertion;
+	usbdrv_deletion_handler_t deletion;
+	usbdrv_completion_handler_t completion;
+} usbdrv_handlers_t;
 
 
 /* Allocate memory used for usb transfers */
@@ -198,6 +115,22 @@ usbdrv_pipe_t *usbdrv_pipeOpen(usbdrv_dev_t *dev, usb_transfer_type_t type, usb_
 /* Closes a previously opened pipe. It cancels all the ongoing urbs on this pipe */
 void usbdrv_pipeClose(usbdrv_pipe_t *pipe);
 
+/* Perform a blocking bulk transfer to a given pipe with timeout in milliseconds, data pointer must be allocated using usbdrv_alloc */
+ssize_t usbdrv_transferBulk(usbdrv_pipe_t *pipe, void *data, size_t size, unsigned int timeout);
+
+/* Perform a blocking control transfer to a given pipe with timeot in milliseconds, optional data pointer
+ * must be allocated using usbdrv_alloc, direction can be deduced from bmRequestType field */
+ssize_t usbdrv_transferControl(usbdrv_pipe_t *pipe, usb_setup_packet_t *setup, void *data, unsigned int timeout);
+
+
+usbdrv_urb_t *usbdrv_urbAlloc(usbdrv_pipe_t *pipe);
+
+
+int usbdrv_transferBulkAsync(usbdrv_urb_t *urb, void *data, size_t size, unsigned int timeout);
+
+
+int usbdrv_transferControlAsync(usbdrv_urb_t *urb, usb_setup_packet_t *setup, void *data, size_t size, unsigned int timeout);
+
 
 int usbdrv_modeswitchHandle(usbdrv_dev_t *dev, const usbdrv_modeswitch_t *mode);
 
@@ -205,31 +138,30 @@ int usbdrv_modeswitchHandle(usbdrv_dev_t *dev, const usbdrv_modeswitch_t *mode);
 const usbdrv_modeswitch_t *usbdrv_modeswitchFind(uint16_t vid, uint16_t pid, const usbdrv_modeswitch_t *modes, int nmodes);
 
 
-int usbdrv_connect(const usbdrv_devid_t *filters, int nfilters, unsigned drvport);
+int usbdrv_connect(const usbdrv_handlers_t *handlers, const usbdrv_devid_t *filters, unsigned int nfilters);
+
+
+usbdrv_dev_t *usbdrv_devGet(int id);
+
+
+int usbdrv_devID(usbdrv_dev_t *dev);
+
+
+void usbdrv_devPut(usbdrv_dev_t *dev);
 
 
 int usbdrv_eventsWait(int port, msg_t *msg);
 
 
-int usbdrv_transferControl(usbdrv_pipe_t *pipe, usb_setup_packet_t *setup, void *data, size_t size, usb_dir_t dir);
-
-
-int usbdrv_transferBulk(usbdrv_pipe_t *pipe, void *data, size_t size, usb_dir_t dir);
-
-
-int usbdrv_transferAsync(usbdrv_pipe_t *pipe, unsigned urbid, size_t size, usb_setup_packet_t *setup);
-
-
 int usbdrv_setConfiguration(usbdrv_pipe_t *pipe, int conf);
 
 
-int usbdrv_urbAlloc(usbdrv_pipe_t *pipe, void *data, usb_dir_t dir, size_t size, int type);
+int usbdrv_clearFeatureHalt(usbdrv_pipe_t *pipe);
+
 
 
 int usbdrv_urbFree(usbdrv_pipe_t *pipe, unsigned urb);
 
-
-int usbdrv_clearFeatureHalt(usbdrv_pipe_t *pipe, int ep);
 
 
 void usbdrv_dumpDeviceDescriptor(FILE *stream, usb_device_desc_t *descr);

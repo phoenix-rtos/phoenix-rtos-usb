@@ -15,58 +15,24 @@
 #include <usbdriver.h>
 #include <sys/msg.h>
 #include <sys/mman.h>
+#include <sys/list.h>
 #include <string.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include "drv_msg.h"
 
+#define LIBUSB_MAX_EVENTS 8
 
 static struct {
-	unsigned port;
+	char stack[2048] __attribute__((aligned(8)));
+	const usbdrv_handlers_t *handlers;
+	unsigned srvport;
+	unsigned drvport;
+	handle_t lock;
+	rbtree_t urbstree;
+	idtree_t devstree;
+	usbdrv_dev_t *devslist;
 } usbdrv_common;
-
-
-int usbdrv_connect(const usbdrv_devid_t *filters, int nfilters, unsigned drvport)
-{
-	msg_t msg = { 0 };
-	usbdrv_in_msg_t *umsg = (usbdrv_in_msg_t *)&msg.i.raw;
-	oid_t oid;
-
-	while (lookup("/dev/usb", NULL, &oid) < 0)
-		usleep(1000000);
-
-	msg.type = mtDevCtl;
-	msg.i.size = sizeof(*filters) * nfilters;
-	msg.i.data = (void *)filters;
-
-	umsg->type = usbdrv_msg_connect;
-	umsg->connect.port = drvport;
-	umsg->connect.nfilters = nfilters;
-
-	if (msgSend(oid.port, &msg) < 0)
-		return -1;
-
-	usbdrv_common.port = oid.port;
-
-	return oid.port;
-}
-
-
-int usbdrv_eventsWait(int port, msg_t *msg)
-{
-	unsigned long rid;
-	int err;
-
-	do {
-		err = msgRecv(port, msg, &rid);
-		if (err < 0 && err != -EINTR)
-			return -1;
-	} while (err == -EINTR);
-
-	if (msgRespond(port, msg, rid) < 0)
-		return -1;
-
-	return 0;
-}
 
 
 static void usbdrv_freeMsg(addr_t physaddr, size_t size)
@@ -78,7 +44,7 @@ static void usbdrv_freeMsg(addr_t physaddr, size_t size)
 	imsg->type = usbdrv_msg_free;
 	imsg->free.physaddr = physaddr;
 	imsg->free.size = size;
-	msgSend(usbdrv_common.port, &msg);
+	msgSend(usbdrv_common.srvport, &msg);
 }
 
 
@@ -109,7 +75,7 @@ void *usbdrv_alloc(size_t size)
 	imsg->type = usbdrv_msg_alloc;
 	imsg->alloc.size = size;
 
-	if ((ret = msgSend(usbdrv_common.port, &msg)) != 0) {
+	if ((ret = msgSend(usbdrv_common.srvport, &msg)) != 0) {
 		return NULL;
 	}
 
@@ -170,7 +136,7 @@ usbdrv_pipe_t *usbdrv_pipeOpen(usbdrv_dev_t *dev, usb_transfer_type_t type, usb_
 	imsg->open.dir = dir;
 	imsg->open.locationID = dev->locationID;
 
-	ret = msgSend(usbdrv_common.port, &msg);
+	ret = msgSend(usbdrv_common.srvport, &msg);
 	if (ret != 0 || omsg->err < 0) {
 		return NULL;
 	}
@@ -186,64 +152,114 @@ usbdrv_pipe_t *usbdrv_pipeOpen(usbdrv_dev_t *dev, usb_transfer_type_t type, usb_
 	pipe->iface = dev->interface;
 	pipe->locationID = dev->locationID;
 	pipe->id = omsg->open.id;
+	pipe->type = type;
+	pipe->dir = dir;
 
 	return pipe;
 }
 
 
-static int usbdrv_urbSubmitSync(usbdrv_urb_t *urb, void *data)
+static int usbdrv_urbSubmitSync(usbdrv_in_submit_t *submit, void *data)
 {
 	msg_t msg = { 0 };
 	usbdrv_in_msg_t *umsg = (usbdrv_in_msg_t *)msg.i.raw;
 	int ret;
 
 	msg.type = mtDevCtl;
-	umsg->type = usbdrv_msg_urb;
+	umsg->type = usbdrv_msg_submit;
 
-	memcpy(&umsg->urb, urb, sizeof(usbdrv_urb_t));
-
-	if (urb->dir == usb_dir_out) {
-		msg.i.data = data;
-		msg.i.size = urb->size;
-	}
-	else {
-		msg.o.data = data;
-		msg.o.size = urb->size;
-	}
-
-	if ((ret = msgSend(usbdrv_common.port, &msg)) != 0)
+	if ((ret = msgSend(usbdrv_common.srvport, &msg)) != 0)
 		return ret;
 
 	return msg.o.io.err;
 }
 
 
-int usbdrv_transferControl(usbdrv_pipe_t *pipe, usb_setup_packet_t *setup, void *data, size_t size, usb_dir_t dir)
+ssize_t usbdrv_transferControl(usbdrv_pipe_t *pipe, usb_setup_packet_t *setup, void *data, unsigned int timeout)
 {
-	usbdrv_urb_t urb = {
-		.pipe = pipe->id,
-		.setup = *setup,
-		.dir = dir,
-		.size = size,
-		.type = usb_transfer_control,
-		.sync = 1
-	};
+	msg_t msg = { 0 };
+	usbdrv_in_msg_t *imsg = (usbdrv_in_msg_t *)msg.i.raw;
+	usbdrv_out_msg_t *omsg = (usbdrv_out_msg_t *)msg.o.raw;
+	usbdrv_in_submit_t *insubmit = &imsg->submit;
+	usbdrv_out_submit_t *outsubmit = &omsg->submit;
+	int ret;
 
-	return usbdrv_urbSubmitSync(&urb, data);
+	if (pipe->type != usb_transfer_control) {
+		return -EINVAL;
+	}
+
+	msg.type = mtDevCtl;
+	imsg->type = usbdrv_msg_submit;
+
+	memcpy(&insubmit->setup, setup, sizeof(usb_setup_packet_t));
+
+	insubmit->pipeid = pipe->id;
+	insubmit->timeout = timeout;
+	insubmit->size = setup->wLength;
+	insubmit->type = usb_transfer_control;
+	insubmit->size = setup->wLength;
+
+	if ((setup->bmRequestType & REQUEST_DIR_HOST2DEV) != 0) {
+		insubmit->dir = usb_dir_in;
+	}
+	else {
+		insubmit->dir = usb_dir_out;
+	}
+
+	/* data stage in control transfer is optional */
+	if (data != NULL) {
+		insubmit->physaddr = va2pa(data);
+	}
+
+	ret = msgSend(usbdrv_common.srvport, &msg);
+	if (ret < 0) {
+		return ret;
+	}
+
+	if (omsg->err != 0) {
+		return omsg->err;
+	}
+	else {
+		return outsubmit->transferred;
+	}
 }
 
 
-int usbdrv_transferBulk(usbdrv_pipe_t *pipe, void *data, size_t size, usb_dir_t dir)
+ssize_t usbdrv_transferBulk(usbdrv_pipe_t *pipe, void *data, size_t size, unsigned int timeout)
 {
-	usbdrv_urb_t urb = {
-		.pipe = pipe->id,
-		.dir = dir,
-		.size = size,
-		.type = usb_transfer_bulk,
-		.sync = 1
-	};
+	msg_t msg = { 0 };
+	usbdrv_in_msg_t *imsg = (usbdrv_in_msg_t *)msg.i.raw;
+	usbdrv_out_msg_t *omsg = (usbdrv_out_msg_t *)msg.o.raw;
+	usbdrv_in_submit_t *insubmit = &imsg->submit;
+	usbdrv_out_submit_t *outsubmit = &omsg->submit;
+	int ret;
 
-	return usbdrv_urbSubmitSync(&urb, data);
+	if (pipe->type != usb_transfer_bulk) {
+		printf("PIPE type wrong\n");
+		return -EINVAL;
+	}
+
+	msg.type = mtDevCtl;
+	imsg->type = usbdrv_msg_submit;
+
+	insubmit->pipeid = pipe->id;
+	insubmit->timeout = timeout;
+	insubmit->size = size;
+	insubmit->physaddr = va2pa(data);
+	insubmit->type = usb_transfer_bulk;
+	insubmit->dir = pipe->dir;
+
+	ret = msgSend(usbdrv_common.srvport, &msg);
+	if (ret < 0) {
+		return ret;
+	}
+
+	if (omsg->err != 0) {
+		return omsg->err;
+	}
+	else {
+		return outsubmit->transferred;
+	}
 }
 
 
@@ -257,87 +273,388 @@ int usbdrv_setConfiguration(usbdrv_pipe_t *pipe, int conf)
 		.wLength = 0,
 	};
 
-	return usbdrv_transferControl(pipe, &setup, NULL, 0, usb_dir_out);
+	return usbdrv_transferControl(pipe, &setup, NULL, 1000);
 }
 
 
-int usbdrv_clearFeatureHalt(usbdrv_pipe_t *pipe, int ep)
+int usbdrv_clearFeatureHalt(usbdrv_pipe_t *pipe)
 {
 	usb_setup_packet_t setup = (usb_setup_packet_t) {
 		.bmRequestType = REQUEST_DIR_HOST2DEV | REQUEST_TYPE_STANDARD | REQUEST_RECIPIENT_DEVICE,
 		.bRequest = REQ_CLEAR_FEATURE,
 		.wValue = USB_ENDPOINT_HALT,
-		.wIndex = ep,
+		.wIndex = pipe->epnum,
 		.wLength = 0,
 	};
 
-	return usbdrv_transferControl(pipe, &setup, NULL, 0, usb_dir_out);
+	return usbdrv_transferControl(pipe, &setup, NULL, 1000);
 }
 
 
-int usbdrv_urbAlloc(usbdrv_pipe_t *pipe, void *data, usb_dir_t dir, size_t size, int type)
+usbdrv_urb_t *usbdrv_urbAlloc(usbdrv_pipe_t *pipe)
 {
 	msg_t msg = { 0 };
-	usbdrv_in_msg_t *umsg = (usbdrv_in_msg_t *)msg.i.raw;
+	usbdrv_in_msg_t *inmsg = (usbdrv_in_msg_t *)msg.i.raw;
+	usbdrv_out_msg_t *outmsg = (usbdrv_out_msg_t *)msg.o.raw;
+	usbdrv_in_urballoc_t *inalloc = &inmsg->urballoc;
+	usbdrv_out_urballoc_t *outalloc = &outmsg->urballoc;
+	usbdrv_urb_t *urb;
 	int ret;
-	usbdrv_urb_t *urb = &umsg->urb;
 
-	urb->pipe = pipe->id;
-	urb->type = type;
-	urb->dir = dir;
-	urb->size = size;
-	urb->sync = 0;
+	urb = malloc(sizeof(usbdrv_urb_t));
+	if (urb == NULL) {
+		return -ENOMEM;
+	}
 
 	msg.type = mtDevCtl;
-	umsg->type = usbdrv_msg_urb;
+	inmsg->type = usbdrv_msg_urballoc;
 
-	if ((ret = msgSend(usbdrv_common.port, &msg)) < 0)
+	inalloc->pipeid = pipe->id;
+	inalloc->type = pipe->type;
+	inalloc->dir = pipe->dir;
+
+	ret = msgSend(usbdrv_common.srvport, &msg);
+	if (ret != 0) {
 		return ret;
+	}
 
-	/* URB id */
-	return *(int *)msg.o.raw;
+	if (outmsg->err != 0) {
+		free(urb);
+		return outmsg->err;
+	}
+
+	urb->id = outalloc->urbid;
+	urb->pipeid = pipe->id;
+	lib_rbInsert(&usbdrv_common.urbstree, urb);
+
+	return urb;
 }
 
 
-int usbdrv_transferAsync(usbdrv_pipe_t *pipe, unsigned urbid, size_t size, usb_setup_packet_t *setup)
+int usbdrv_transferBulkAsync(usbdrv_urb_t *urb, void *data, size_t size, unsigned int timeout)
 {
 	msg_t msg = { 0 };
 	usbdrv_in_msg_t *umsg = (usbdrv_in_msg_t *)msg.i.raw;
 	int ret;
-	usbdrv_urbcmd_t *urbcmd = &umsg->urbcmd;
+	usbdrv_in_urbcmd_t *urbcmd = &umsg->urbcmd;
 
-	urbcmd->pipeid = pipe->id;
-	urbcmd->size = size;
-	urbcmd->urbid = urbid;
+	urbcmd->pipeid = urb->pipeid;
+	urbcmd->urbid = urb->id;
 	urbcmd->cmd = urbcmd_submit;
+	urbcmd->physaddr = va2pa(data);
+	urbcmd->size = size;
 
-	if (setup != NULL) {
-		memcpy(&urbcmd->setup, setup, sizeof(*setup));
-	}
 	msg.type = mtDevCtl;
 	umsg->type = usbdrv_msg_urbcmd;
-	if ((ret = msgSend(usbdrv_common.port, &msg)) < 0)
+
+	ret = msgSend(usbdrv_common.srvport, &msg);
+	if (ret < 0) {
 		return ret;
+	}
 
 	return 0;
 }
 
 
-int usbdrv_urbFree(usbdrv_pipe_t *pipe, unsigned urb)
+int usbdrv_transferControlAsync(usbdrv_urb_t *urb, usb_setup_packet_t *setup, void *data, size_t size, unsigned int timeout)
 {
 	msg_t msg = { 0 };
 	usbdrv_in_msg_t *umsg = (usbdrv_in_msg_t *)msg.i.raw;
 	int ret;
-	usbdrv_urbcmd_t *urbcmd = &umsg->urbcmd;
+	usbdrv_in_urbcmd_t *urbcmd = &umsg->urbcmd;
 
-	urbcmd->pipeid = pipe->id;
-	urbcmd->urbid = urb;
+	urbcmd->pipeid = urb->pipeid;
+	urbcmd->urbid = urb->id;
+	urbcmd->cmd = urbcmd_submit;
+	urbcmd->physaddr = va2pa(data);
+	urbcmd->size = size;
+	memcpy(&urbcmd->setup, setup, sizeof(usb_setup_packet_t));
+
+	msg.type = mtDevCtl;
+	umsg->type = usbdrv_msg_urbcmd;
+
+	ret = msgSend(usbdrv_common.srvport, &msg);
+	if (ret < 0) {
+		return ret;
+	}
+
+	return 0;
+}
+
+
+int usbdrv_urbFree(usbdrv_urb_t *urb)
+{
+	msg_t msg = { 0 };
+	usbdrv_in_msg_t *umsg = (usbdrv_in_msg_t *)msg.i.raw;
+	int ret;
+	usbdrv_in_urbcmd_t *urbcmd = &umsg->urbcmd;
+
+	urbcmd->pipeid = urb->pipeid;
+	urbcmd->urbid = urb->id;
 	urbcmd->cmd = urbcmd_free;
 
 	msg.type = mtDevCtl;
 	umsg->type = usbdrv_msg_urbcmd;
-	if ((ret = msgSend(usbdrv_common.port, &msg)) < 0)
-		return ret;
+
+	msgSend(usbdrv_common.srvport, &msg);
+
+	lib_rbRemove(&usbdrv_common.urbstree, urb);
+	free(urb);
+
+	return 0;
+}
+
+
+static void usbdrv_handleInsertion(usbdrv_event_t *event)
+{
+	usbdrv_dev_t *dev;
+	oid_t oid;
+
+	dev = malloc(sizeof(usbdrv_dev_t));
+	if (dev == NULL) {
+		fprintf(stderr, "libusb: Out of memory!\n");
+		return;
+	}
+
+	dev->bus = event->bus;
+	dev->dev = event->dev;
+	dev->interface = event->interface;
+	dev->locationID = event->locationID;
+	dev->refcnt = 1;
+
+	mutexLock(usbdrv_common.lock);
+	if (idtree_alloc(&usbdrv_common.devstree, &dev->node) < 0) {
+		free(dev);
+		return;
+	}
+	LIST_ADD(&usbdrv_common.devslist, dev);
+
+	if (usbdrv_common.handlers->insertion(dev) != 0) {
+		idtree_remove(&usbdrv_common.devstree, &dev->node);
+		LIST_REMOVE(&usbdrv_common.devslist, dev);
+		free(dev);
+	}
+	mutexUnlock(usbdrv_common.lock);
+}
+
+
+static usbdrv_dev_t *_usbdrv_devFind(int locationID, int interface)
+{
+	usbdrv_dev_t *ret = NULL, *tmp = usbdrv_common.devslist;
+
+	do {
+		if (tmp->locationID == locationID && tmp->interface == interface) {
+			ret = tmp;
+			break;
+		}
+
+		tmp = tmp->next;
+	} while (tmp != usbdrv_common.devslist);
+}
+
+
+static usbdrv_dev_t *usbdrv_devFind(int locationID, int interface)
+{
+	usbdrv_dev_t *ret;
+
+	mutexLock(usbdrv_common.lock);
+	ret = _usbdrv_devFind(locationID, interface);
+	if (ret != NULL) {
+		ret->refcnt++;
+	}
+	mutexUnlock(usbdrv_common.lock);
+
+	return ret;
+}
+
+
+static usbdrv_urb_t *usbdrv_urbFind(int urbid)
+{
+	usbdrv_urb_t find;
+
+	find.id = urbid;
+
+	return lib_treeof(usbdrv_urb_t, node, lib_rbFind(&usbdrv_common.devstree, &find.node));
+}
+
+
+usbdrv_dev_t *usbdrv_devGet(int id)
+{
+	usbdrv_dev_t *dev;
+
+	mutexLock(usbdrv_common.lock);
+	dev = lib_treeof(usbdrv_dev_t, node, idtree_find(&usbdrv_common.devstree, id));
+	if (dev != NULL) {
+		dev->refcnt++;
+	}
+	mutexUnlock(usbdrv_common.lock);
+
+	return dev;
+}
+
+
+static void _usbdrv_devPut(usbdrv_dev_t *dev)
+{
+	dev->refcnt--;
+	if (dev->refcnt == 0) {
+		usbdrv_common.handlers->deletion(dev);
+		free(dev);
+	}
+}
+
+
+void usbdrv_devPut(usbdrv_dev_t *dev)
+{
+	mutexLock(usbdrv_common.lock);
+	_usbdrv_devPut(dev);
+	mutexUnlock(usbdrv_common.lock);
+}
+
+
+int usbdrv_devID(usbdrv_dev_t *dev)
+{
+	return dev->node.id;
+}
+
+
+static void usbdrv_handleDeletion(usbdrv_event_t *event)
+{
+	usbdrv_dev_t *dev;
+
+	mutexLock(usbdrv_common.lock);
+	dev = _usbdrv_devFind(event->locationID, event->interface);
+	if (dev == NULL) {
+		return;
+	}
+
+	idtree_remove(&usbdrv_common.devstree, &dev->node);
+	LIST_REMOVE(&usbdrv_common.devslist, dev);
+	_usbdrv_devPut(dev);
+	mutexUnlock(usbdrv_common.lock);
+}
+
+
+static void usbdrv_handleCompletion(usbdrv_event_t *event)
+{
+	usbdrv_dev_t *dev;
+	usbdrv_urb_t *urb;
+
+	dev = usbdrv_devFind(event->locationID, event->interface);
+	if (dev == NULL) {
+		return;
+	}
+
+	urb = usbdrv_urbFind(event->urbid);
+	if (urb == NULL) {
+		return;
+	}
+
+	usbdrv_common.handlers->completion(dev, urb, urb->vaddr, event->transferred, event->status);
+}
+
+
+static void usbdrv_thread(void *arg)
+{
+	msg_t msg = { 0 };
+	usbdrv_in_msg_t *inmsg = (usbdrv_in_msg_t *)msg.i.raw;
+	usbdrv_out_msg_t *outmsg = (usbdrv_out_msg_t *)msg.o.raw;
+	usbdrv_event_t *events;
+	unsigned long rid;
+	int err;
+	int i;
+
+	msg.type = mtDevctl;
+	inmsg->type = usbdrv_msg_wait;
+	inmsg->wait.maxevents = LIBUSB_MAX_EVENTS;
+
+	events = malloc(sizeof(usbdrv_event_t) * LIBUSB_MAX_EVENTS);
+	if (events == NULL) {
+		fprintf(stderr, "libusb: Out of memory\n");
+		return;
+	}
+
+	msg.o.data = events;
+	msg.o.size = sizeof(usbdrv_event_t) * LIBUSB_MAX_EVENTS;
+
+	for (;;) {
+		if (msgSend(usbdrv_common.srvport, &msg) < 0) {
+			return;
+		}
+
+		/* Handle a stream of events */
+		for (i = 0; i < outmsg->wait.nevents; i++) {
+			switch (events[i].type) {
+				case usbdrv_insertion_event:
+					usbdrv_handleInsertion(&events[i]);
+					break;
+				case usbdrv_deletion_event:
+					usbdrv_handleDeletion(&events[i]);
+					break;
+				case usbdrv_completion_event:
+					usbdrv_handleCompletion(&events[i]);
+					break;
+				default:
+					fprintf(stderr, "libusb: Error when receiving event from host\n");
+					break;
+			}
+		}
+	}
+
+}
+
+
+static int usbdrv_urbcmp(rbnode_t *node1, rbnode_t *node2)
+{
+	usbdrv_urb_t *urb1 = lib_treeof(usbdrv_urb_t, node, node1);
+	usbdrv_urb_t *urb2 = lib_treeof(usbdrv_urb_t, node, node2);
+
+	if (urb1->id > urb2->id) {
+		return 1;
+	}
+	else if (urb1->id < urb2->id) {
+		return -1;
+	}
+	else {
+		return 0;
+	}
+}
+
+
+int usbdrv_connect(const usbdrv_handlers_t *handlers, const usbdrv_devid_t *filters, unsigned int nfilters)
+{
+	msg_t msg = { 0 };
+	usbdrv_in_msg_t *umsg = (usbdrv_in_msg_t *)&msg.i.raw;
+	oid_t oid;
+
+	while (lookup("/dev/usb", NULL, &oid) < 0) {
+		usleep(1000000);
+	}
+
+	msg.type = mtDevCtl;
+	msg.i.size = sizeof(*filters) * nfilters;
+	msg.i.data = (void *)filters;
+
+	umsg->type = usbdrv_msg_connect;
+	umsg->connect.port = usbdrv_common.drvport;
+	umsg->connect.nfilters = nfilters;
+
+	if (msgSend(oid.port, &msg) < 0) {
+		return -1;
+	}
+
+	if (mutexCreate(&usbdrv_common.lock) != 0) {
+		return -1;
+	}
+
+	idtree_init(&usbdrv_common.devstree);
+	lib_rbInit(&usbdrv_common.devstree, usbdrv_urbcmp, NULL);
+
+	if (beginthread(usbdrv_thread, 3, usbdrv_common.stack, sizeof(usbdrv_common.stack), NULL) != 0) {
+		resourceDestroy(usbdrv_common.drvport);
+		return -1;
+	}
+
+	usbdrv_common.srvport = oid.port;
 
 	return 0;
 }
@@ -432,7 +749,7 @@ int usbdrv_modeswitchHandle(usbdrv_dev_t *dev, const usbdrv_modeswitch_t *mode)
 		return -EINVAL;
 
 	memcpy(msg, mode->msg, sizeof(msg));
-	if (usbdrv_transferBulk(pipeOut, msg, sizeof(msg), usb_dir_out) < 0)
+	if (usbdrv_transferBulk(pipeOut, msg, sizeof(msg), 1000) < 0)
 		return -EINVAL;
 
 	return 0;
