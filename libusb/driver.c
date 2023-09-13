@@ -51,7 +51,7 @@ int usb_connect(const usb_device_id_t *filters, int nfilters, unsigned drvport)
 
 int usb_eventsWait(int port, msg_t *msg)
 {
-	unsigned long rid;
+	msg_rid_t rid;
 	int err;
 
 	do {

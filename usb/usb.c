@@ -253,7 +253,7 @@ static void usb_statusthr(void *arg)
 static void usb_msgthr(void *arg)
 {
 	unsigned port = (int)arg;
-	unsigned long rid;
+	msg_rid_t rid;
 	msg_t msg;
 	usb_msg_t *umsg;
 	int resp;
