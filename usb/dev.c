@@ -204,9 +204,9 @@ static int usb_getDevDesc(usb_dev_t *dev)
 static int usb_getConfiguration(usb_dev_t *dev)
 {
 	usb_configuration_desc_t pre, *conf;
-	usb_interface_desc_t *iface;
 	char *ptr;
-	int i;
+	int size, nifs;
+	int ret = 0;
 
 	/* Get first nine bytes to get to know configuration len */
 	if (usb_getDescriptor(dev, USB_DESC_CONFIG, 0, (char *)&pre, sizeof(pre)) < 0) {
@@ -232,19 +232,84 @@ static int usb_getConfiguration(usb_dev_t *dev)
 	}
 
 	ptr = (char *)conf + sizeof(usb_configuration_desc_t);
-	for (i = 0; i < dev->nifs; i++) {
-		iface = (usb_interface_desc_t *)ptr;
-		ptr += sizeof(usb_interface_desc_t);
-		/* Class and Vendor specific descriptors */
-		/* TODO: save them to allow drivers access */
-		while (ptr[1] != USB_DESC_ENDPOINT && ptr < (char *)conf + pre.wTotalLength)
-			ptr += ptr[0];
-		if (ptr >= (char *)conf + pre.wTotalLength)
+	size = pre.wTotalLength - sizeof(usb_configuration_desc_t);
+	nifs = 0;
+
+	if (usb_isRoothub(dev)) {
+		dev->ifs[0].desc = (usb_interface_desc_t *)ptr;
+		dev->ifs[0].eps = (usb_endpoint_desc_t *)(ptr + 9);
+		dev->conf = conf;
+		return 0;
+	}
+
+	while (size >= (int)sizeof(struct usb_desc_header)) {
+		uint8_t len = ((struct usb_desc_header *)ptr)->bLength;
+
+		if ((len < sizeof(struct usb_desc_header)) || (len > size)) {
+			USB_LOG("usb: Invalid descriptor size: %u\n", len);
 			break;
-		dev->ifs[i].eps = (usb_endpoint_desc_t *)ptr;
-		dev->ifs[i].desc = iface;
-		while (ptr < (char *)conf + pre.wTotalLength && ptr[1] == USB_DESC_ENDPOINT)
-			ptr += sizeof(usb_endpoint_desc_t);
+		}
+
+		switch (((struct usb_desc_header *)ptr)->bDescriptorType) {
+			case USB_DESC_INTERFACE:
+				if (len == sizeof(usb_interface_desc_t)) {
+					if (nifs < dev->nifs) {
+						dev->ifs[nifs].desc = (usb_interface_desc_t *)ptr;
+						nifs += 1;
+					}
+					else {
+						ret = -1;
+					}
+				}
+				else {
+					USB_LOG("usb: Interface descriptor with invalid size\n");
+					ret = -1;
+				}
+				break;
+
+			case USB_DESC_ENDPOINT:
+				if (len == sizeof(usb_endpoint_desc_t)) {
+					if ((nifs != 0) && (nifs <= dev->nifs) && (dev->ifs[nifs - 1].eps == NULL)) {
+						dev->ifs[nifs - 1].eps = (usb_endpoint_desc_t *)ptr;
+					}
+				}
+				else {
+					USB_LOG("usb: Endpoint descriptor with invalid size\n");
+					ret = -1;
+				}
+				break;
+
+			case USB_DESC_INTERFACE_ASSOCIATION:
+				/* FIXME: right now all IADs needs to be of the same class (eg. CDC), multiple claseeses are not supported */
+				if (len == sizeof(usb_interface_association_desc_t)) {
+					dev->desc.bDeviceClass = ((usb_interface_association_desc_t *)ptr)->bFunctionClass;
+					dev->desc.bDeviceSubClass = ((usb_interface_association_desc_t *)ptr)->bFunctionSubClass;
+					dev->desc.bDeviceProtocol = ((usb_interface_association_desc_t *)ptr)->bFunctionProtocol;
+				}
+				else {
+					USB_LOG("usb: Interface assoctiation descriptor with invalid size\n");
+					ret = -1;
+				}
+				break;
+
+			case USB_DESC_CS_INTERFACE:
+				/* TODO: save Class-Specific Functional Descriptors to be used by device drivers - silently ignored for now */
+				break;
+
+			default:
+				USB_LOG("usb: Ignoring unkonown descriptor type: 0x%02x\n", ((struct usb_desc_header *)ptr)->bDescriptorType);
+				break;
+		}
+
+		size -= len;
+		ptr += len;
+	}
+
+	if ((ret != 0) || (nifs != dev->nifs)) {
+		USB_LOG("usb: Fail to parse interface descriptors\n");
+		free(dev->ifs);
+		free(conf);
+		return ret;
 	}
 
 	dev->conf = conf;
