@@ -52,7 +52,7 @@ static void *usb_allocUncached(size_t size)
 {
 	void *res;
 
-	if ((res = mmap(NULL, size, PROT_WRITE | PROT_READ, MAP_ANONYMOUS | MAP_UNCACHED, OID_NULL, 0)) == MAP_FAILED)
+	if ((res = mmap(NULL, size, PROT_WRITE | PROT_READ, MAP_ANONYMOUS | MAP_UNCACHED, -1, 0)) == MAP_FAILED)
 		return NULL;
 
 	return res;
