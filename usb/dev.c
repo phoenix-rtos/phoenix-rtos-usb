@@ -205,7 +205,7 @@ static int usb_getConfiguration(usb_dev_t *dev)
 {
 	usb_configuration_desc_t pre, *conf;
 	char *ptr;
-	int size, nifs;
+	int size;
 	int ret = 0;
 
 	/* Get first nine bytes to get to know configuration len */
@@ -214,7 +214,11 @@ static int usb_getConfiguration(usb_dev_t *dev)
 		return -1;
 	}
 
-	/* TODO: check descriptor correctness */
+	if ((pre.bLength != sizeof(pre)) || (pre.bDescriptorType != USB_DESC_CONFIG) || (pre.wTotalLength < sizeof(pre))) {
+		/* Invalid data returned */
+		return -1;
+	}
+
 	if ((conf = malloc(pre.wTotalLength)) == NULL)
 		return -ENOMEM;
 
@@ -233,16 +237,11 @@ static int usb_getConfiguration(usb_dev_t *dev)
 
 	ptr = (char *)conf + sizeof(usb_configuration_desc_t);
 	size = pre.wTotalLength - sizeof(usb_configuration_desc_t);
-	nifs = 0;
 
-	if (usb_isRoothub(dev)) {
-		dev->ifs[0].desc = (usb_interface_desc_t *)ptr;
-		dev->ifs[0].eps = (usb_endpoint_desc_t *)(ptr + 9);
-		dev->conf = conf;
-		return 0;
-	}
 
-	while (size >= (int)sizeof(struct usb_desc_header)) {
+	int lastIfNum = -1;
+	uint8_t lastAlternateSetting = 0;
+	while ((size >= (int)sizeof(struct usb_desc_header)) && (ret == 0)) {
 		uint8_t len = ((struct usb_desc_header *)ptr)->bLength;
 
 		if ((len < sizeof(struct usb_desc_header)) || (len > size)) {
@@ -253,12 +252,20 @@ static int usb_getConfiguration(usb_dev_t *dev)
 		switch (((struct usb_desc_header *)ptr)->bDescriptorType) {
 			case USB_DESC_INTERFACE:
 				if (len == sizeof(usb_interface_desc_t)) {
-					if (nifs < dev->nifs) {
-						dev->ifs[nifs].desc = (usb_interface_desc_t *)ptr;
-						nifs += 1;
+					usb_interface_desc_t *desc = (usb_interface_desc_t *)ptr;
+					lastIfNum = desc->bInterfaceNumber;
+					lastAlternateSetting = desc->bAlternateSetting;
+					if (lastIfNum >= dev->nifs) {
+						/* Invalid interface number */
+						ret = -1;
+						break;
+					}
+
+					if (lastAlternateSetting != 0) {
+						/* TODO: handle alternate setting maybe */
 					}
 					else {
-						ret = -1;
+						dev->ifs[lastIfNum].desc = desc;
 					}
 				}
 				else {
@@ -269,8 +276,24 @@ static int usb_getConfiguration(usb_dev_t *dev)
 
 			case USB_DESC_ENDPOINT:
 				if (len == sizeof(usb_endpoint_desc_t)) {
-					if ((nifs != 0) && (nifs <= dev->nifs) && (dev->ifs[nifs - 1].eps == NULL)) {
-						dev->ifs[nifs - 1].eps = (usb_endpoint_desc_t *)ptr;
+					if (lastIfNum < 0) {
+						/* TODO: should this be considered an error? */
+						break;
+					}
+
+					if (lastAlternateSetting != 0) {
+						/* Endpoint belongs to alternate setting - we don't handle it right now */
+					}
+					else if (dev->ifs[lastIfNum].eps == NULL) {
+						dev->ifs[lastIfNum].eps = (usb_endpoint_desc_t *)ptr;
+						if (size < (dev->ifs[lastIfNum].desc->bNumEndpoints * sizeof(usb_endpoint_desc_t))) {
+							ret = -1;
+							break;
+						}
+					}
+					else if (ptr >= (char *)(dev->ifs[lastIfNum].eps + dev->ifs[lastIfNum].desc->bNumEndpoints)) {
+						ret = -1;
+						break;
 					}
 				}
 				else {
@@ -280,7 +303,7 @@ static int usb_getConfiguration(usb_dev_t *dev)
 				break;
 
 			case USB_DESC_INTERFACE_ASSOCIATION:
-				/* FIXME: right now all IADs needs to be of the same class (eg. CDC), multiple claseeses are not supported */
+				/* FIXME: right now all IADs needs to be of the same class (eg. CDC), multiple classes are not supported */
 				if (len == sizeof(usb_interface_association_desc_t)) {
 					dev->desc.bDeviceClass = ((usb_interface_association_desc_t *)ptr)->bFunctionClass;
 					dev->desc.bDeviceSubClass = ((usb_interface_association_desc_t *)ptr)->bFunctionSubClass;
@@ -305,9 +328,19 @@ static int usb_getConfiguration(usb_dev_t *dev)
 		ptr += len;
 	}
 
-	if ((ret != 0) || (nifs != dev->nifs)) {
+	for (size_t i = 0; i < dev->nifs; i++) {
+		if ((dev->ifs[i].desc == NULL) || (dev->ifs[i].eps == NULL)) {
+			/* Data missing */
+			ret = -1;
+			break;
+		}
+	}
+
+	if (ret != 0) {
 		USB_LOG("usb: Fail to parse interface descriptors\n");
 		free(dev->ifs);
+		dev->ifs = NULL;
+		dev->nifs = 0;
 		free(conf);
 		return ret;
 	}
