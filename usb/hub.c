@@ -199,7 +199,7 @@ int hub_portReset(usb_dev_t *hub, int port, usb_port_status_t *status)
 	if (hub_setPortFeature(hub, port, USB_PORT_FEAT_RESET) < 0)
 		return -1;
 
-	for (retries = 5; (status->wPortChange & USB_PORT_FEAT_C_RESET) == 0 && retries > 0; --retries) {
+	for (retries = 5; (status->wPortChange & USB_PORT_STAT_C_RESET) == 0 && retries > 0; --retries) {
 		usleep(100000);
 		if (hub_getPortStatus(hub, port, status) < 0)
 			return -1;
