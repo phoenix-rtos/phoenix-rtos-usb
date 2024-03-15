@@ -219,7 +219,7 @@ static void usb_urbSyncCompleted(usb_transfer_t *t)
 
 	msg.type = mtDevCtl;
 	msg.pid = t->pid;
-	msg.o.io.err = (t->error != 0) ? -t->error : t->transferred;
+	msg.o.err = (t->error != 0) ? -t->error : t->transferred;
 
 	if (t->direction == usb_dir_in)
 		msg.o.data = t->buffer;
@@ -265,17 +265,17 @@ static void usb_msgthr(void *arg)
 		resp = 1;
 		switch (msg.type) {
 			case mtRead:
-				msg.o.io.err = usb_devsList(msg.o.data, msg.o.size);
+				msg.o.err = usb_devsList(msg.o.data, msg.o.size);
 				break;
 			case mtDevCtl:
 				umsg = (usb_msg_t *)msg.i.raw;
 				switch (umsg->type) {
 					case usb_msg_connect:
-						msg.o.io.err = usb_handleConnect(&msg, &umsg->connect);
+						msg.o.err = usb_handleConnect(&msg, &umsg->connect);
 						break;
 					case usb_msg_open:
 						if (usb_handleOpen(&umsg->open, &msg) != 0)
-							msg.o.io.err = -1;
+							msg.o.err = -1;
 						break;
 					case usb_msg_urb:
 						ret = usb_handleUrb(&msg, port, rid);
@@ -284,20 +284,20 @@ static void usb_msgthr(void *arg)
 							resp = 0;
 						}
 						else {
-							msg.o.io.err = ret;
+							msg.o.err = ret;
 						}
 						break;
 					case usb_msg_urbcmd:
-						msg.o.io.err = usb_handleUrbcmd(&msg);
+						msg.o.err = usb_handleUrbcmd(&msg);
 						break;
 					default:
-						msg.o.io.err = -EINVAL;
+						msg.o.err = -EINVAL;
 						USB_LOG("usb: unsupported usb_msg type: %d\n", umsg->type);
 						break;
 				}
 				break;
 			default:
-				msg.o.io.err = -EINVAL;
+				msg.o.err = -EINVAL;
 				USB_LOG("usb: unsupported msg type\n");
 		}
 
