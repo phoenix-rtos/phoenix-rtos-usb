@@ -113,7 +113,7 @@ static int usb_urbSubmitSync(usb_urb_t *urb, void *data)
 	if ((ret = msgSend(usbdrv_common.port, &msg)) != 0)
 		return ret;
 
-	return msg.o.io.err;
+	return msg.o.err;
 }
 
 
