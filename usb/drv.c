@@ -418,7 +418,7 @@ void usb_drvAdd(usb_drv_t *drv)
 }
 
 
-static usb_transfer_t *usb_transferAlloc(int sync, int type, usb_setup_packet_t *setup, usb_dir_t dir, size_t size, char *buf)
+static usb_transfer_t *usb_transferAlloc(int sync, int type, usb_setup_packet_t *setup, usb_dir_t dir, size_t size, const char *buf)
 {
 	usb_transfer_t *t;
 
