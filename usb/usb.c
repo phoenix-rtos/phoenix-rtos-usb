@@ -182,9 +182,7 @@ static int usb_handleOpen(usb_open_t *o, msg_t *msg)
 	if ((pipe = usb_drvPipeOpen(drv, hcd, o->locationID, o->iface, o->dir, o->type)) < 0)
 		return -EINVAL;
 
-	*(int *)msg->o.raw = pipe;
-
-	return 0;
+	return pipe;
 }
 
 
@@ -274,8 +272,7 @@ static void usb_msgthr(void *arg)
 						msg.o.err = usb_handleConnect(&msg, &umsg->connect);
 						break;
 					case usb_msg_open:
-						if (usb_handleOpen(&umsg->open, &msg) != 0)
-							msg.o.err = -1;
+						msg.o.err = usb_handleOpen(&umsg->open, &msg);
 						break;
 					case usb_msg_urb:
 						ret = usb_handleUrb(&msg, port, rid);

@@ -86,7 +86,7 @@ int usb_open(usb_devinfo_t *dev, usb_transfer_type_t type, usb_dir_t dir)
 	if ((ret = msgSend(usbdrv_common.port, &msg)) != 0)
 		return ret;
 
-	return *(int *)msg.o.raw;
+	return msg.o.err;
 }
 
 
@@ -194,7 +194,7 @@ int usb_urbAlloc(unsigned pipe, void *data, usb_dir_t dir, size_t size, int type
 		return ret;
 
 	/* URB id */
-	return *(int *)msg.o.raw;
+	return msg.o.err;
 }
 
 
