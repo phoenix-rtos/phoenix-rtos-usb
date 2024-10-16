@@ -165,8 +165,10 @@ hcd_t *hcd_init(void)
 	int nhcd, i;
 	int num = 1;
 
-	if ((nhcd = hcd_getInfo(&info)) <= 0)
+	if ((nhcd = hcd_getInfo(&info)) <= 0) {
+		USB_LOG("usb-hcd: Fail to get hcd info\n");
 		return NULL;
+	}
 
 	for (i = 0; i < nhcd; i++) {
 		if ((ops = hcd_lookup(info[i].type)) == NULL) {

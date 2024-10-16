@@ -400,14 +400,15 @@ int hub_conf(usb_dev_t *hub)
 {
 	char buf[15];
 	usb_hub_desc_t *desc;
-	int i;
+	int i, rv;
 
 	if (hub_setConf(hub, 1) < 0) {
 		USB_LOG("hub: Fail to set configuration!\n");
 		return -EINVAL;
 	}
 
-	if (hub_getDesc(hub, buf, sizeof(buf)) < 0) {
+	rv = hub_getDesc(hub, buf, sizeof(buf));
+	if (rv < 0) {
 		USB_LOG("hub: Fail to get descriptor\n");
 		return -EINVAL;
 	}
@@ -415,6 +416,11 @@ int hub_conf(usb_dev_t *hub)
 	/* Hub descriptors might vary in size */
 	desc = (usb_hub_desc_t *)buf;
 	hub->nports = min(USB_HUB_MAX_PORTS, desc->bNbrPorts);
+	if (hub->nports == 0) {
+		USB_LOG("hub: Hub has 0 ports, impossible!\n");
+		return -ENOMEM;
+	}
+
 	if ((hub->devs = calloc(hub->nports, sizeof(usb_dev_t *))) == NULL) {
 		USB_LOG("hub: Out of memory!\n");
 		return -ENOMEM;

@@ -48,7 +48,7 @@ typedef struct hcd {
 	uint32_t addrmask[4];
 	usb_transfer_t *transfers;
 	handle_t transLock;
-	volatile int *base, *phybase;
+	volatile int *base, *opbase, *phybase;
 	void *priv;
 } hcd_t;
 

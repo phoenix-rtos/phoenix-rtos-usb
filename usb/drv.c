@@ -363,6 +363,8 @@ int usb_drvBind(usb_dev_t *dev)
 	umsg->insertion.descriptor = dev->desc;
 	umsg->insertion.locationID = dev->locationID;
 
+	printf("%s:%s\n", __FILE__, __func__);
+
 	for (i = 0; i < dev->nifs; i++) {
 		if ((drv = usb_drvMatchIface(dev, &dev->ifs[i])) != NULL) {
 			dev->ifs[i].driver = drv;
