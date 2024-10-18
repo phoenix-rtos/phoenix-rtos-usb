@@ -64,6 +64,7 @@ typedef struct usb_transfer {
 	unsigned long rid;
 	unsigned int port;
 	pid_t pid;
+	msg_t msg;
 
 	struct _usb_dev *hub;
 
