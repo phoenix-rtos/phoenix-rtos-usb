@@ -20,6 +20,7 @@
 #include <sys/platform.h>
 #include <sys/types.h>
 #include <sys/threads.h>
+#include <sys/minmax.h>
 #include <posix/utils.h>
 
 #include <string.h>
@@ -213,14 +214,13 @@ static void usb_urbAsyncCompleted(usb_transfer_t *t)
 
 static void usb_urbSyncCompleted(usb_transfer_t *t)
 {
-	msg_t msg = { 0 };
+	msg_t msg = t->msg;
 
-	msg.type = mtDevCtl;
-	msg.pid = t->pid;
 	msg.o.err = (t->error != 0) ? -t->error : t->transferred;
 
-	if (t->direction == usb_dir_in)
-		msg.o.data = t->buffer;
+	if ((t->direction == usb_dir_in) && (t->error == 0)) {
+		memcpy(msg.o.data, t->buffer, min(msg.o.size, t->transferred));
+	}
 
 	/* TODO: it should be non-blocking */
 	msgRespond(usb_common.port, &msg, t->rid);

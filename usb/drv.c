@@ -561,6 +561,7 @@ static int _usb_handleUrb(msg_t *msg, unsigned int port, unsigned long rid)
 
 	t->port = drv->port;
 	t->pipeid = urb->pipe;
+	t->msg = *msg;
 
 	/* For async urbs only allocate resources. The transfer would be executed,
 	 * upon receiving usb_submit_t msg later */
