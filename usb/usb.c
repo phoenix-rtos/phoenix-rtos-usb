@@ -48,6 +48,7 @@ static struct {
 	usb_transfer_t *finished;
 	int nhcd;
 	uint32_t port;
+	msg_t urbSyncMsg;
 } usb_common;
 
 
@@ -138,7 +139,6 @@ static int usb_devsList(char *buffer, size_t size)
 }
 
 
-
 static int usb_handleConnect(msg_t *msg, usb_connect_t *c)
 {
 	usb_drv_t *drv;
@@ -213,14 +213,24 @@ static void usb_urbAsyncCompleted(usb_transfer_t *t)
 
 static void usb_urbSyncCompleted(usb_transfer_t *t)
 {
-	msg_t msg = { 0 };
+	msg_t msg;
 
-	msg.type = mtDevCtl;
-	msg.pid = t->pid;
+	mutexLock(usb_common.transferLock);
+	msg = usb_common.urbSyncMsg;
+	mutexUnlock(usb_common.transferLock);
+
+	/* TODO: fine tune this msg passing
+	   also aren't there many urbSyncs possible in the same time?
+	   then msg = usb_common.urbSyncMsg is not enough */
+
+	// msg.type = mtDevCtl;
+	// msg.pid = t->pid;
 	msg.o.err = (t->error != 0) ? -t->error : t->transferred;
 
-	if (t->direction == usb_dir_in)
-		msg.o.data = t->buffer;
+	if (t->direction == usb_dir_in) {
+		/* TODO min(msg.o.size, t->transferred)? */
+		memcpy(msg.o.data, t->buffer, t->transferred);
+	}
 
 	/* TODO: it should be non-blocking */
 	msgRespond(usb_common.port, &msg, t->rid);
@@ -279,6 +289,9 @@ static void usb_msgthr(void *arg)
 						if (umsg->urb.sync && ret == 0) {
 							/* Block the sender until the transfer finishes */
 							resp = 0;
+							mutexLock(usb_common.transferLock);
+							usb_common.urbSyncMsg = msg;
+							mutexUnlock(usb_common.transferLock);
 						}
 						else {
 							msg.o.err = ret;
