@@ -14,12 +14,27 @@
 #include <errno.h>
 #include <usbdriver.h>
 #include <sys/msg.h>
+#include <sys/threads.h>
+#include <sys/list.h>
 #include <string.h>
+#include <stdlib.h>
 #include <unistd.h>
 
 
+#ifndef USB_N_UMSG_THREADS
+#define USB_N_UMSG_THREADS 2
+#endif
+
+#ifndef USB_UMSG_PRIO
+#define USB_UMSG_PRIO 3
+#endif
+
+
 static struct {
-	unsigned port;
+	char ustack[USB_N_UMSG_THREADS - 1][2048] __attribute__((aligned(8)));
+	const usb_handlers_t *handlers;
+	unsigned srvport;
+	unsigned drvport;
 } usbdrv_common;
 
 
@@ -43,11 +58,43 @@ static void usb_hostLookup(oid_t *oid)
 }
 
 
-int usb_connect(const usb_device_id_t *filters, int nfilters, unsigned drvport)
+static void usb_thread(void *arg)
+{
+	msg_t msg = { 0 };
+	usb_msg_t *umsg = (usb_msg_t *)&msg.i.raw;
+	int ret;
+
+	for (;;) {
+		ret = usb_eventsWait(usbdrv_common.drvport, &msg);
+		if (ret < 0) {
+			/* TODO should the thread abort the loop on error? */
+			continue;
+		}
+
+		switch (umsg->type) {
+			case usb_msg_insertion:
+				usbdrv_common.handlers->insertion(&umsg->insertion);
+				break;
+			case usb_msg_deletion:
+				usbdrv_common.handlers->deletion(&umsg->deletion);
+				break;
+			case usb_msg_connect:
+				usbdrv_common.handlers->completion(&umsg->completion, msg.i.data, msg.i.size);
+				break;
+			default:
+				fprintf(stderr, "usbdrv: Error when receiving event from host\n");
+				break;
+		}
+	}
+}
+
+
+int usb_driverRun(const usb_handlers_t *handlers, const usb_device_id_t *filters, unsigned int nfilters)
 {
 	msg_t msg = { 0 };
 	usb_msg_t *umsg = (usb_msg_t *)&msg.i.raw;
 	oid_t oid;
+	int ret, i;
 
 	usb_hostLookup(&oid);
 
@@ -56,15 +103,28 @@ int usb_connect(const usb_device_id_t *filters, int nfilters, unsigned drvport)
 	msg.i.data = (void *)filters;
 
 	umsg->type = usb_msg_connect;
-	umsg->connect.port = drvport;
+	umsg->connect.port = usbdrv_common.drvport;
 	umsg->connect.nfilters = nfilters;
 
-	if (msgSend(oid.port, &msg) < 0)
+	if (msgSend(oid.port, &msg) < 0) {
 		return -1;
+	}
 
-	usbdrv_common.port = oid.port;
+	usbdrv_common.srvport = oid.port;
+	usbdrv_common.handlers = handlers;
 
-	return oid.port;
+	for (i = 0; i < USB_N_UMSG_THREADS - 1; i++) {
+		ret = beginthread(usb_thread, USB_UMSG_PRIO, usbdrv_common.ustack[i], sizeof(usbdrv_common.ustack[i]), NULL);
+		if (ret < 0) {
+			fprintf(stderr, "usbdrv: fail to beginthread ret: %d\n", ret);
+			return 1;
+		}
+	}
+
+	priority(USB_UMSG_PRIO);
+	usb_thread(NULL);
+
+	return 0;
 }
 
 
@@ -102,8 +162,10 @@ int usb_open(usb_devinfo_t *dev, usb_transfer_type_t type, usb_dir_t dir)
 	umsg->open.dir = dir;
 	umsg->open.locationID = dev->locationID;
 
-	if ((ret = msgSend(usbdrv_common.port, &msg)) != 0)
+	ret = msgSend(usbdrv_common.srvport, &msg);
+	if (ret != 0) {
 		return ret;
+	}
 
 	return msg.o.err;
 }
@@ -129,7 +191,7 @@ static int usb_urbSubmitSync(usb_urb_t *urb, void *data)
 		msg.o.size = urb->size;
 	}
 
-	if ((ret = msgSend(usbdrv_common.port, &msg)) != 0)
+	if ((ret = msgSend(usbdrv_common.srvport, &msg)) != 0)
 		return ret;
 
 	return msg.o.err;
@@ -209,8 +271,10 @@ int usb_urbAlloc(unsigned pipe, void *data, usb_dir_t dir, size_t size, int type
 	msg.type = mtDevCtl;
 	umsg->type = usb_msg_urb;
 
-	if ((ret = msgSend(usbdrv_common.port, &msg)) < 0)
+	ret = msgSend(usbdrv_common.srvport, &msg);
+	if (ret < 0) {
 		return ret;
+	}
 
 	/* URB id */
 	return msg.o.err;
@@ -234,8 +298,10 @@ int usb_transferAsync(unsigned pipe, unsigned urbid, size_t size, usb_setup_pack
 	}
 	msg.type = mtDevCtl;
 	umsg->type = usb_msg_urbcmd;
-	if ((ret = msgSend(usbdrv_common.port, &msg)) < 0)
+	ret = msgSend(usbdrv_common.srvport, &msg);
+	if (ret < 0) {
 		return ret;
+	}
 
 	return 0;
 }
@@ -254,7 +320,7 @@ int usb_urbFree(unsigned pipe, unsigned urb)
 
 	msg.type = mtDevCtl;
 	umsg->type = usb_msg_urbcmd;
-	if ((ret = msgSend(usbdrv_common.port, &msg)) < 0)
+	if ((ret = msgSend(usbdrv_common.srvport, &msg)) < 0)
 		return ret;
 
 	return 0;
