@@ -23,14 +23,33 @@ static struct {
 } usbdrv_common;
 
 
+static void usb_hostLookup(oid_t *oid)
+{
+	int ret;
+
+	for (;;) {
+		ret = lookup("devfs/usb", NULL, oid);
+		if (ret >= 0) {
+			break;
+		}
+
+		ret = lookup("/dev/usb", NULL, oid);
+		if (ret >= 0) {
+			break;
+		}
+
+		usleep(1000000);
+	}
+}
+
+
 int usb_connect(const usb_device_id_t *filters, int nfilters, unsigned drvport)
 {
 	msg_t msg = { 0 };
 	usb_msg_t *umsg = (usb_msg_t *)&msg.i.raw;
 	oid_t oid;
 
-	while (lookup("/dev/usb", NULL, &oid) < 0)
-		usleep(1000000);
+	usb_hostLookup(&oid);
 
 	msg.type = mtDevCtl;
 	msg.i.size = sizeof(*filters) * nfilters;
