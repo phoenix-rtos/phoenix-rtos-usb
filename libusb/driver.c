@@ -89,12 +89,19 @@ static void usb_thread(void *arg)
 }
 
 
-int usb_driverRun(const usb_handlers_t *handlers, const usb_device_id_t *filters, unsigned int nfilters)
+int usb_driverRun(usb_driver_t *driver)
 {
 	msg_t msg = { 0 };
 	usb_msg_t *umsg = (usb_msg_t *)&msg.i.raw;
+	const usb_device_id_t *filters = driver->filters;
+	unsigned int nfilters = driver->nfilters;
 	oid_t oid;
 	int ret, i;
+
+	ret = driver->ops->init(driver);
+	if (ret < 0) {
+		return 1;
+	}
 
 	usb_hostLookup(&oid);
 
@@ -111,7 +118,7 @@ int usb_driverRun(const usb_handlers_t *handlers, const usb_device_id_t *filters
 	}
 
 	usbdrv_common.srvport = oid.port;
-	usbdrv_common.handlers = handlers;
+	usbdrv_common.handlers = driver->handlers;
 
 	for (i = 0; i < USB_N_UMSG_THREADS - 1; i++) {
 		ret = beginthread(usb_thread, USB_UMSG_PRIO, usbdrv_common.ustack[i], sizeof(usbdrv_common.ustack[i]), NULL);
