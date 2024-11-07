@@ -19,6 +19,7 @@
 
 #include <usb.h>
 #include <stddef.h>
+#include <stdbool.h>
 #include <sys/msg.h>
 #include <posix/idtree.h>
 
@@ -98,7 +99,8 @@ typedef struct {
 	enum {
 		urbcmd_submit,
 		urbcmd_cancel,
-		urbcmd_free } cmd;
+		urbcmd_free
+	} cmd;
 } usb_urbcmd_t;
 
 
@@ -155,13 +157,31 @@ typedef struct {
 } usb_handlers_t;
 
 
+typedef struct usb_driver_t usb_driver_t;
+
+
+typedef struct {
+	int (*init)(usb_driver_t *driver);
+	int (*destroy)(usb_driver_t *driver);
+} usb_driverOps_t;
+
+
+struct usb_driver_t {
+	const usb_handlers_t *handlers;
+	const usb_driverOps_t *ops;
+	const usb_device_id_t *filters;
+	unsigned int nfilters;
+	uintptr_t *priv;
+};
+
+
 int usb_modeswitchHandle(usb_devinfo_t *dev, const usb_modeswitch_t *mode);
 
 
 const usb_modeswitch_t *usb_modeswitchFind(uint16_t vid, uint16_t pid, const usb_modeswitch_t *modes, int nmodes);
 
 
-int usb_driverRun(const usb_handlers_t *handlers, const usb_device_id_t *filters, unsigned int nfilters);
+int usb_driverRun(usb_driver_t *driver);
 
 
 int usb_eventsWait(int port, msg_t *msg);
