@@ -141,13 +141,16 @@ typedef struct {
 } usb_modeswitch_t;
 
 
-typedef int (*usb_completion_handler_t)(usb_completion_t *completion, const char *data, size_t len);
+typedef struct usb_driver usb_driver_t;
 
 
-typedef int (*usb_insertion_handler_t)(usb_devinfo_t *devinfo);
+typedef int (*usb_completion_handler_t)(usb_driver_t *drv, usb_completion_t *completion, const char *data, size_t len);
 
 
-typedef int (*usb_deletion_handler_t)(usb_deletion_t *deletion);
+typedef int (*usb_insertion_handler_t)(usb_driver_t *drv, usb_devinfo_t *devinfo);
+
+
+typedef int (*usb_deletion_handler_t)(usb_driver_t *drv, usb_deletion_t *deletion);
 
 
 typedef struct {
@@ -157,58 +160,69 @@ typedef struct {
 } usb_handlers_t;
 
 
-typedef struct usb_driver_t usb_driver_t;
-
-
 typedef struct {
 	int (*init)(usb_driver_t *driver);
 	int (*destroy)(usb_driver_t *driver);
 } usb_driverOps_t;
 
 
-struct usb_driver_t {
+typedef struct {
+	int (*open)(usb_driver_t *drv, usb_devinfo_t *dev, usb_transfer_type_t type, usb_dir_t dir);
+
+	/* TODO rename to transferSync, submitAsync */
+	int (*submitSync)(usb_driver_t *drv, usb_urb_t *urb, void *data);
+	int (*transferAsync)(usb_driver_t *drv, unsigned pipe, unsigned urbid, size_t size, usb_setup_packet_t *setup);
+
+	int (*urbFree)(usb_driver_t *drv, unsigned pipe, unsigned urb);
+	int (*urbAlloc)(usb_driver_t *drv, unsigned pipe, void *data, usb_dir_t dir, size_t size, int type);
+} usb_pipeOps_t;
+
+
+struct usb_driver {
 	const usb_handlers_t *handlers;
 	const usb_driverOps_t *ops;
+	const usb_pipeOps_t *pipeOps;
 	const usb_device_id_t *filters;
 	unsigned int nfilters;
 	uintptr_t *priv;
+	uintptr_t *pipePriv;
 };
 
 
-int usb_modeswitchHandle(usb_devinfo_t *dev, const usb_modeswitch_t *mode);
+int usb_modeswitchHandle(usb_driver_t *drv, usb_devinfo_t *dev, const usb_modeswitch_t *mode);
 
 
 const usb_modeswitch_t *usb_modeswitchFind(uint16_t vid, uint16_t pid, const usb_modeswitch_t *modes, int nmodes);
 
 
-int usb_driverRun(usb_driver_t *driver);
+int usb_procDrvRun(usb_driver_t *driver);
 
 
 int usb_eventsWait(int port, msg_t *msg);
 
 
-int usb_open(usb_devinfo_t *dev, usb_transfer_type_t type, usb_dir_t dir);
+int usb_open(usb_driver_t *drv, usb_devinfo_t *dev, usb_transfer_type_t type, usb_dir_t dir);
 
 
-int usb_transferControl(unsigned pipe, usb_setup_packet_t *setup, void *data, size_t size, usb_dir_t dir);
+int usb_transferControl(usb_driver_t *drv, unsigned pipe, usb_setup_packet_t *setup, void *data, size_t size, usb_dir_t dir);
 
 
-int usb_transferBulk(unsigned pipe, void *data, size_t size, usb_dir_t dir);
+int usb_transferBulk(usb_driver_t *drv, unsigned pipe, void *data, size_t size, usb_dir_t dir);
 
 
-int usb_transferAsync(unsigned pipe, unsigned urbid, size_t size, usb_setup_packet_t *setup);
+int usb_transferAsync(usb_driver_t *drv, unsigned pipe, unsigned urbid, size_t size, usb_setup_packet_t *setup);
 
 
-int usb_setConfiguration(unsigned pipe, int conf);
+int usb_setConfiguration(usb_driver_t *drv, unsigned pipe, int conf);
 
 
-int usb_urbAlloc(unsigned pipe, void *data, usb_dir_t dir, size_t size, int type);
+int usb_urbAlloc(usb_driver_t *drv, unsigned pipe, void *data, usb_dir_t dir, size_t size, int type);
 
 
-int usb_urbFree(unsigned pipe, unsigned urb);
+int usb_urbFree(usb_driver_t *drv, unsigned pipe, unsigned urb);
 
 
-int usb_clearFeatureHalt(unsigned pipe, int ep);
+int usb_clearFeatureHalt(usb_driver_t *drv, unsigned pipe, int ep);
 
 
 void usb_dumpDeviceDescriptor(FILE *stream, usb_device_desc_t *descr);
