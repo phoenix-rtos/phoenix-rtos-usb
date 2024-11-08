@@ -3,8 +3,8 @@
  *
  * libusb/driver.c
  *
- * Copyright 2021 Phoenix Systems
- * Author: Maciej Purski
+ * Copyright 2021, 2024 Phoenix Systems
+ * Author: Maciej Purski, Adam Greloch
  *
  * This file is part of Phoenix-RTOS.
  *
@@ -30,12 +30,38 @@
 #endif
 
 
+static usb_pipeOps_t usbprocdrv_pipeOps;
+
+
 static struct {
 	char ustack[USB_N_UMSG_THREADS - 1][2048] __attribute__((aligned(8)));
-	const usb_handlers_t *handlers;
 	unsigned srvport;
 	unsigned drvport;
 } usbdrv_common;
+
+
+int usb_open(usb_driver_t *drv, usb_devinfo_t *dev, usb_transfer_type_t type, usb_dir_t dir)
+{
+	return drv->pipeOps->open(drv, dev, type, dir);
+}
+
+
+int usb_urbAlloc(usb_driver_t *drv, unsigned pipe, void *data, usb_dir_t dir, size_t size, int type)
+{
+	return drv->pipeOps->urbAlloc(drv, pipe, data, dir, size, type);
+}
+
+
+int usb_urbFree(usb_driver_t *drv, unsigned pipe, unsigned urb)
+{
+	return drv->pipeOps->urbFree(drv, pipe, urb);
+}
+
+
+int usb_transferAsync(usb_driver_t *drv, unsigned pipe, unsigned urbid, size_t size, usb_setup_packet_t *setup)
+{
+	return drv->pipeOps->transferAsync(drv, pipe, urbid, size, setup);
+}
 
 
 static void usb_hostLookup(oid_t *oid)
@@ -60,6 +86,7 @@ static void usb_hostLookup(oid_t *oid)
 
 static void usb_thread(void *arg)
 {
+	usb_driver_t *drv = (usb_driver_t *)arg;
 	msg_t msg = { 0 };
 	usb_msg_t *umsg = (usb_msg_t *)&msg.i.raw;
 	int ret;
@@ -73,13 +100,13 @@ static void usb_thread(void *arg)
 
 		switch (umsg->type) {
 			case usb_msg_insertion:
-				usbdrv_common.handlers->insertion(&umsg->insertion);
+				drv->handlers->insertion(drv, &umsg->insertion);
 				break;
 			case usb_msg_deletion:
-				usbdrv_common.handlers->deletion(&umsg->deletion);
+				drv->handlers->deletion(drv, &umsg->deletion);
 				break;
-			case usb_msg_connect:
-				usbdrv_common.handlers->completion(&umsg->completion, msg.i.data, msg.i.size);
+			case usb_msg_completion:
+				drv->handlers->completion(drv, &umsg->completion, msg.i.data, msg.i.size);
 				break;
 			default:
 				fprintf(stderr, "usbdrv: Error when receiving event from host\n");
@@ -89,21 +116,10 @@ static void usb_thread(void *arg)
 }
 
 
-int usb_driverRun(usb_driver_t *driver)
+static int usb_connect(const usb_device_id_t *filters, unsigned int nfilters)
 {
 	msg_t msg = { 0 };
 	usb_msg_t *umsg = (usb_msg_t *)&msg.i.raw;
-	const usb_device_id_t *filters = driver->filters;
-	unsigned int nfilters = driver->nfilters;
-	oid_t oid;
-	int ret, i;
-
-	ret = driver->ops->init(driver);
-	if (ret < 0) {
-		return 1;
-	}
-
-	usb_hostLookup(&oid);
 
 	msg.type = mtDevCtl;
 	msg.i.size = sizeof(*filters) * nfilters;
@@ -113,15 +129,37 @@ int usb_driverRun(usb_driver_t *driver)
 	umsg->connect.port = usbdrv_common.drvport;
 	umsg->connect.nfilters = nfilters;
 
-	if (msgSend(oid.port, &msg) < 0) {
+	return msgSend(usbdrv_common.srvport, &msg) < 0;
+}
+
+
+int usb_procDrvRun(usb_driver_t *drv)
+{
+	oid_t oid;
+	int ret, i;
+
+	/* usb_procDrvRun is invoked iff drivers are in the proc variant */
+	drv->pipeOps = &usbprocdrv_pipeOps;
+
+	ret = drv->ops->init(drv);
+	if (ret < 0) {
+		return 1;
+	}
+
+	usb_hostLookup(&oid);
+	usbdrv_common.srvport = oid.port;
+
+	if (portCreate(&usbdrv_common.drvport) != 0) {
 		return -1;
 	}
 
-	usbdrv_common.srvport = oid.port;
-	usbdrv_common.handlers = driver->handlers;
+	ret = usb_connect(drv->filters, drv->nfilters);
+	if (ret < 0) {
+		return -1;
+	}
 
 	for (i = 0; i < USB_N_UMSG_THREADS - 1; i++) {
-		ret = beginthread(usb_thread, USB_UMSG_PRIO, usbdrv_common.ustack[i], sizeof(usbdrv_common.ustack[i]), NULL);
+		ret = beginthread(usb_thread, USB_UMSG_PRIO, usbdrv_common.ustack[i], sizeof(usbdrv_common.ustack[i]), drv);
 		if (ret < 0) {
 			fprintf(stderr, "usbdrv: fail to beginthread ret: %d\n", ret);
 			return 1;
@@ -129,7 +167,7 @@ int usb_driverRun(usb_driver_t *driver)
 	}
 
 	priority(USB_UMSG_PRIO);
-	usb_thread(NULL);
+	usb_thread(drv);
 
 	return 0;
 }
@@ -153,7 +191,7 @@ int usb_eventsWait(int port, msg_t *msg)
 }
 
 
-int usb_open(usb_devinfo_t *dev, usb_transfer_type_t type, usb_dir_t dir)
+static int usbprocdrv_open(usb_driver_t *drv, usb_devinfo_t *dev, usb_transfer_type_t type, usb_dir_t dir)
 {
 	msg_t msg = { 0 };
 	usb_msg_t *umsg = (usb_msg_t *)msg.i.raw;
@@ -178,7 +216,7 @@ int usb_open(usb_devinfo_t *dev, usb_transfer_type_t type, usb_dir_t dir)
 }
 
 
-static int usb_urbSubmitSync(usb_urb_t *urb, void *data)
+static int usbprocdrv_urbSubmitSync(usb_driver_t *drv, usb_urb_t *urb, void *data)
 {
 	msg_t msg = { 0 };
 	usb_msg_t *umsg = (usb_msg_t *)msg.i.raw;
@@ -205,7 +243,7 @@ static int usb_urbSubmitSync(usb_urb_t *urb, void *data)
 }
 
 
-int usb_transferControl(unsigned pipe, usb_setup_packet_t *setup, void *data, size_t size, usb_dir_t dir)
+int usb_transferControl(usb_driver_t *drv, unsigned pipe, usb_setup_packet_t *setup, void *data, size_t size, usb_dir_t dir)
 {
 	usb_urb_t urb = {
 		.pipe = pipe,
@@ -216,11 +254,11 @@ int usb_transferControl(unsigned pipe, usb_setup_packet_t *setup, void *data, si
 		.sync = 1
 	};
 
-	return usb_urbSubmitSync(&urb, data);
+	return drv->pipeOps->submitSync(drv, &urb, data);
 }
 
 
-int usb_transferBulk(unsigned pipe, void *data, size_t size, usb_dir_t dir)
+int usb_transferBulk(usb_driver_t *drv, unsigned pipe, void *data, size_t size, usb_dir_t dir)
 {
 	usb_urb_t urb = {
 		.pipe = pipe,
@@ -230,11 +268,11 @@ int usb_transferBulk(unsigned pipe, void *data, size_t size, usb_dir_t dir)
 		.sync = 1
 	};
 
-	return usb_urbSubmitSync(&urb, data);
+	return drv->pipeOps->submitSync(drv, &urb, data);
 }
 
 
-int usb_setConfiguration(unsigned pipe, int conf)
+int usb_setConfiguration(usb_driver_t *drv, unsigned pipe, int conf)
 {
 	usb_setup_packet_t setup = (usb_setup_packet_t) {
 		.bmRequestType = REQUEST_DIR_HOST2DEV | REQUEST_TYPE_STANDARD | REQUEST_RECIPIENT_DEVICE,
@@ -244,11 +282,11 @@ int usb_setConfiguration(unsigned pipe, int conf)
 		.wLength = 0,
 	};
 
-	return usb_transferControl(pipe, &setup, NULL, 0, usb_dir_out);
+	return usb_transferControl(drv, pipe, &setup, NULL, 0, usb_dir_out);
 }
 
 
-int usb_clearFeatureHalt(unsigned pipe, int ep)
+int usb_clearFeatureHalt(usb_driver_t *drv, unsigned pipe, int ep)
 {
 	usb_setup_packet_t setup = (usb_setup_packet_t) {
 		.bmRequestType = REQUEST_DIR_HOST2DEV | REQUEST_TYPE_STANDARD | REQUEST_RECIPIENT_DEVICE,
@@ -258,11 +296,11 @@ int usb_clearFeatureHalt(unsigned pipe, int ep)
 		.wLength = 0,
 	};
 
-	return usb_transferControl(pipe, &setup, NULL, 0, usb_dir_out);
+	return usb_transferControl(drv, pipe, &setup, NULL, 0, usb_dir_out);
 }
 
 
-int usb_urbAlloc(unsigned pipe, void *data, usb_dir_t dir, size_t size, int type)
+static int usbprocdrv_urbAlloc(usb_driver_t *drv, unsigned pipe, void *data, usb_dir_t dir, size_t size, int type)
 {
 	msg_t msg = { 0 };
 	usb_msg_t *umsg = (usb_msg_t *)msg.i.raw;
@@ -288,7 +326,7 @@ int usb_urbAlloc(unsigned pipe, void *data, usb_dir_t dir, size_t size, int type
 }
 
 
-int usb_transferAsync(unsigned pipe, unsigned urbid, size_t size, usb_setup_packet_t *setup)
+static int usbprocdrv_transferAsync(usb_driver_t *drv, unsigned pipe, unsigned urbid, size_t size, usb_setup_packet_t *setup)
 {
 	msg_t msg = { 0 };
 	usb_msg_t *umsg = (usb_msg_t *)msg.i.raw;
@@ -314,7 +352,7 @@ int usb_transferAsync(unsigned pipe, unsigned urbid, size_t size, usb_setup_pack
 }
 
 
-int usb_urbFree(unsigned pipe, unsigned urb)
+static int usbprocdrv_urbFree(usb_driver_t *drv, unsigned pipe, unsigned urb)
 {
 	msg_t msg = { 0 };
 	usb_msg_t *umsg = (usb_msg_t *)msg.i.raw;
@@ -416,26 +454,47 @@ void usb_dumpStringDesc(FILE *stream, usb_string_desc_t *descr)
 }
 
 
-int usb_modeswitchHandle(usb_devinfo_t *dev, const usb_modeswitch_t *mode)
+int usb_modeswitchHandle(usb_driver_t *drv, usb_devinfo_t *dev, const usb_modeswitch_t *mode)
 {
 	char msg[sizeof(mode->msg)];
-	int pipeCtrl, pipeIn, pipeOut;
+	int pipeCtrl, pipeIn, pipeOut, ret;
 
-	if ((pipeCtrl = usb_open(dev, usb_transfer_control, 0)) < 0)
+	pipeCtrl = usb_open(drv, dev, usb_transfer_control, 0);
+	if (pipeCtrl < 0) {
 		return -EINVAL;
+	}
 
-	if (usb_setConfiguration(pipeCtrl, 1) != 0)
+	ret = usb_setConfiguration(drv, pipeCtrl, 1);
+	if (ret != 0) {
 		return -EINVAL;
+	}
 
-	if ((pipeIn = usb_open(dev, usb_transfer_bulk, usb_dir_in)) < 0)
+	pipeIn = usb_open(drv, dev, usb_transfer_bulk, usb_dir_in);
+	if (pipeIn < 0) {
 		return -EINVAL;
+	}
 
-	if ((pipeOut = usb_open(dev, usb_transfer_bulk, usb_dir_out)) < 0)
+	pipeOut = usb_open(drv, dev, usb_transfer_bulk, usb_dir_out);
+	if (pipeOut < 0) {
 		return -EINVAL;
+	}
 
 	memcpy(msg, mode->msg, sizeof(msg));
-	if (usb_transferBulk(pipeOut, msg, sizeof(msg), usb_dir_out) < 0)
+
+	ret = usb_transferBulk(drv, pipeOut, msg, sizeof(msg), usb_dir_out);
+	if (ret < 0) {
 		return -EINVAL;
+	}
 
 	return 0;
 }
+
+
+static usb_pipeOps_t usbprocdrv_pipeOps = {
+	.open = usbprocdrv_open,
+	.submitSync = usbprocdrv_urbSubmitSync,
+	.transferAsync = usbprocdrv_transferAsync,
+
+	.urbFree = usbprocdrv_urbFree,
+	.urbAlloc = usbprocdrv_urbAlloc,
+};
