@@ -34,7 +34,6 @@
 #include "hcd.h"
 #include "hub.h"
 
-
 #define N_STATUSTHRS   1
 #define STATUSTHR_PRIO 3
 #define MSGTHR_PRIO    3
@@ -45,16 +44,61 @@ static struct {
 	handle_t transferLock;
 	handle_t finishedCond;
 	hcd_t *hcds;
-	usb_drv_t *drvs;
+	usb_drvpriv_t *drvs;
 	usb_transfer_t *finished;
 	int nhcd;
 	uint32_t port;
 } usb_common;
 
 
-int usb_transferCheck(usb_transfer_t *t)
+static int usb_internalDriverInit(usb_driver_t *driver)
 {
-	int val;
+	usb_drvpriv_t *priv;
+	int ret;
+
+	ret = usb_libDrvInit(driver);
+	if (ret < 0) {
+		return ret;
+	}
+
+	priv = malloc(sizeof(usb_drvpriv_t));
+	if (priv == NULL) {
+		USB_LOG("usb: malloc failed!\n");
+		usb_libDrvDestroy(driver);
+		return -ENOMEM;
+	}
+
+	priv->type = usb_drvType_intrn;
+
+	ret = mutexCreate(&priv->intrn.transferLock);
+	if (ret != 0) {
+		USB_LOG("usb: Can't create mutex!\n");
+		free(priv);
+		usb_libDrvDestroy(driver);
+		return -ENOMEM;
+	}
+
+	ret = condCreate(&priv->intrn.finishedCond);
+	if (ret != 0) {
+		USB_LOG("usb: Can't create cond!\n");
+		resourceDestroy(priv->intrn.transferLock);
+		free(priv);
+		usb_libDrvDestroy(driver);
+		return -ENOMEM;
+	}
+
+	driver->hostPriv = (void *)priv;
+	priv->driver = *driver;
+
+	usb_drvAdd(priv);
+
+	return 0;
+}
+
+
+bool usb_transferCheck(usb_transfer_t *t)
+{
+	bool val;
 
 	mutexLock(usb_common.transferLock);
 	val = t->finished;
@@ -69,8 +113,13 @@ int usb_transferSubmit(usb_transfer_t *t, usb_pipe_t *pipe, handle_t *cond)
 	hcd_t *hcd = pipe->dev->hcd;
 	int ret = 0;
 
+	if (t->recipient == usb_drvType_none) {
+		USB_LOG("usb: transfer recipient unspecified!\n");
+		return -EINVAL;
+	}
+
 	mutexLock(usb_common.transferLock);
-	t->finished = 0;
+	t->finished = false;
 	t->error = 0;
 	t->transferred = 0;
 	if (t->direction == usb_dir_in)
@@ -96,10 +145,10 @@ int usb_transferSubmit(usb_transfer_t *t, usb_pipe_t *pipe, handle_t *cond)
 /* Called by the hcd driver */
 void usb_transferFinished(usb_transfer_t *t, int status)
 {
-	int urbtrans = 0;
+	bool urbtrans = false;
 
 	mutexLock(usb_common.transferLock);
-	t->finished = 1;
+	t->finished = true;
 
 	if (status >= 0) {
 		t->transferred = status;
@@ -110,25 +159,26 @@ void usb_transferFinished(usb_transfer_t *t, int status)
 		t->error = -status;
 	}
 
-	/* URB transfer */
-	if (t->port != 0) {
-		urbtrans = 1;
+	/* If recipient is not HCD, this is an URB transfer */
+	if (t->recipient != usb_drvType_hcd) {
+		urbtrans = true;
 		t->state = urb_completed;
 		LIST_ADD(&usb_common.finished, t);
 	}
 
 	mutexUnlock(usb_common.transferLock);
 
-	/* Internal transfer */
-	if (!urbtrans) {
-		if (t->type == usb_transfer_interrupt && t->transferred > 0)
-			hub_notify(t->hub);
-		else
-			usb_devSignal();
+	if (urbtrans) {
+		condSignal(usb_common.finishedCond);
 	}
 	else {
-		/* URB transfer */
-		condSignal(usb_common.finishedCond);
+		/* Internal HCD transfer */
+		if (t->type == usb_transfer_interrupt && t->transferred > 0) {
+			hub_notify(t->hub);
+		}
+		else {
+			usb_devSignal();
+		}
 	}
 }
 
@@ -142,20 +192,24 @@ static int usb_devsList(char *buffer, size_t size)
 
 static int usb_handleConnect(msg_t *msg, usb_connect_t *c)
 {
-	usb_drv_t *drv;
+	usb_drvpriv_t *drv;
 
-	if ((drv = malloc(sizeof(usb_drv_t))) == NULL)
+	drv = malloc(sizeof(usb_drvpriv_t));
+	if (drv == NULL) {
 		return -ENOMEM;
+	}
 
-	if ((drv->filters = malloc(sizeof(usb_device_id_t) * c->nfilters)) == NULL) {
+	drv->driver.filters = malloc(sizeof(usb_device_id_t) * c->nfilters);
+	if (drv->driver.filters == NULL) {
 		free(drv);
 		return -ENOMEM;
 	}
 
-	drv->pid = msg->pid;
-	drv->port = c->port;
-	drv->nfilters = c->nfilters;
-	memcpy(drv->filters, msg->i.data, msg->i.size);
+	drv->type = usb_drvType_extrn;
+	drv->extrn.id = msg->pid;
+	drv->extrn.port = c->port;
+	drv->driver.nfilters = c->nfilters;
+	memcpy((void *)drv->driver.filters, msg->i.data, msg->i.size);
 	usb_drvAdd(drv);
 
 	/* TODO: handle orphaned devices */
@@ -166,7 +220,7 @@ static int usb_handleConnect(msg_t *msg, usb_connect_t *c)
 
 static int usb_handleOpen(usb_open_t *o, msg_t *msg)
 {
-	usb_drv_t *drv;
+	usb_drvpriv_t *drv;
 	int pipe;
 	hcd_t *hcd;
 
@@ -207,23 +261,25 @@ static void usb_urbAsyncCompleted(usb_transfer_t *t)
 	}
 	t->state = urb_idle;
 
-	msgSend(t->port, &msg);
+	msgSend(t->extrn.port, &msg);
 	usb_transferPut(t);
 }
 
 
 static void usb_urbSyncCompleted(usb_transfer_t *t)
 {
-	msg_t msg = t->msg;
+	msg_t msg = { 0 };
 
+	msg.type = mtDevCtl;
+	msg.pid = t->extrn.pid;
 	msg.o.err = (t->error != 0) ? -t->error : t->transferred;
 
 	if ((t->direction == usb_dir_in) && (t->error == 0)) {
-		memcpy(msg.o.data, t->buffer, min(msg.o.size, t->transferred));
+		memcpy(t->extrn.odata, t->buffer, min(t->extrn.osize, t->transferred));
 	}
 
 	/* TODO: it should be non-blocking */
-	msgRespond(usb_common.port, &msg, t->rid);
+	msgRespond(usb_common.port, &msg, t->extrn.rid);
 	usb_transferFree(t);
 }
 
@@ -240,10 +296,12 @@ static void usb_statusthr(void *arg)
 		LIST_REMOVE(&usb_common.finished, t);
 		mutexUnlock(usb_common.transferLock);
 
-		if (t->async)
-			usb_urbAsyncCompleted(t);
-		else
-			usb_urbSyncCompleted(t);
+		if (t->async) {
+			t->ops->urbAsyncCompleted(t);
+		}
+		else {
+			t->ops->urbSyncCompleted(t);
+		}
 	}
 }
 
@@ -308,6 +366,7 @@ int main(int argc, char *argv[])
 {
 	oid_t oid;
 	int i;
+	usb_driver_t *drv;
 
 	if (mutexCreate(&usb_common.transferLock) != 0) {
 		USB_LOG("usb: Can't create mutex!\n");
@@ -315,7 +374,7 @@ int main(int argc, char *argv[])
 	}
 
 	if (condCreate(&usb_common.finishedCond) != 0) {
-		USB_LOG("usb: Can't create mutex!\n");
+		USB_LOG("usb: Can't create cond!\n");
 		return 1;
 	}
 
@@ -327,6 +386,17 @@ int main(int argc, char *argv[])
 	if (usb_devInit() != 0) {
 		USB_LOG("usb: Fail to init devices!\n");
 		return 1;
+	}
+
+	for (;;) {
+		drv = usb_registeredDriverPop();
+		if (drv != NULL) {
+			USB_LOG("usb: Initializing driver as host-side: %s\n", drv->name);
+			usb_internalDriverInit(drv);
+		}
+		else {
+			break;
+		}
 	}
 
 	if (hub_init() != 0) {
@@ -364,4 +434,37 @@ int main(int argc, char *argv[])
 	usb_msgthr((void *)usb_common.port);
 
 	return 0;
+}
+
+
+int usblibdrv_open(usb_driver_t *drv, usb_devinfo_t *dev, usb_transfer_type_t type, usb_dir_t dir)
+{
+	usb_drvpriv_t *drvpriv = (usb_drvpriv_t *)drv->hostPriv;
+	int pipe;
+	hcd_t *hcd;
+
+	hcd = hcd_find(usb_common.hcds, dev->locationID);
+	if (hcd == NULL) {
+		USB_LOG("usb: Failed to find dev: %d\n", dev->locationID);
+		return -EINVAL;
+	}
+
+	pipe = usb_drvPipeOpen(drvpriv, hcd, dev->locationID, dev->interface, dir, type);
+	if (pipe < 0) {
+		return -EINVAL;
+	}
+
+	return pipe;
+}
+
+
+static usb_transferOps_t usbprocdrv_transferOps = {
+	.urbSyncCompleted = usb_urbSyncCompleted,
+	.urbAsyncCompleted = usb_urbAsyncCompleted,
+};
+
+
+const usb_transferOps_t *usbprocdrv_transferOpsGet(void)
+{
+	return &usbprocdrv_transferOps;
 }
