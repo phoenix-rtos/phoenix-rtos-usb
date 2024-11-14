@@ -46,6 +46,7 @@ int usb_devCtrl(usb_dev_t *dev, usb_dir_t dir, usb_setup_packet_t *setup, char *
 		.setup = (usb_setup_packet_t *)usbdev_common.setupBuf,
 		.buffer = usbdev_common.ctrlBuf,
 		.size = len,
+		.recipient = usb_drvType_hcd,
 	};
 	int ret;
 
