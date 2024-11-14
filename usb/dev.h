@@ -29,7 +29,7 @@ typedef struct {
 	void *classDesc;
 	char *str;
 
-	struct _usb_drv *driver;
+	struct usb_drvpriv *driver;
 } usb_iface_t;
 
 
@@ -56,7 +56,7 @@ typedef struct _usb_dev {
 
 	/* Hub fields */
 	struct _usb_dev **devs;
-	struct usb_transfer *statusTransfer;
+	usb_transfer_t *statusTransfer;
 	usb_pipe_t *irqPipe;
 	int nports;
 } usb_dev_t;

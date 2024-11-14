@@ -3,8 +3,8 @@
  *
  * USB Host
  *
- * Copyright 2021 Phoenix Systems
- * Author: Maciej Purski
+ * Copyright 2021, 2024 Phoenix Systems
+ * Author: Maciej Purski, Adam Greloch
  *
  * This file is part of Phoenix-RTOS.
  *
@@ -19,11 +19,12 @@
 #include <usbdriver.h>
 #include <usb.h>
 
+
 enum { urb_idle, urb_completed, urb_ongoing };
 
 typedef struct {
 	idnode_t linkage;
-	struct _usb_drv *drv;
+	struct usb_drvpriv *drv;
 
 	usb_transfer_type_t type;
 	usb_dir_t dir;
@@ -41,13 +42,29 @@ static inline int usb_pipeid(usb_pipe_t *pipe)
 	return pipe->linkage.id;
 }
 
+
+typedef struct usb_transfer_t usb_transfer_t;
+
+
+typedef struct {
+	void (*urbSyncCompleted)(usb_transfer_t *t);
+	void (*urbAsyncCompleted)(usb_transfer_t *t);
+} usb_transferOps_t;
+
+
+const usb_transferOps_t *usblibdrv_transferOpsGet(void);
+
+
+const usb_transferOps_t *usbprocdrv_transferOpsGet(void);
+
+
 /* Used to handle both internal and external transfers */
-typedef struct usb_transfer {
-	struct usb_transfer *next, *prev;
+struct usb_transfer_t {
+	usb_transfer_t *next, *prev;
 	usb_setup_packet_t *setup;
 
 	unsigned async;
-	volatile int finished;
+	volatile bool finished;
 	volatile int error;
 
 	char *buffer;
@@ -57,22 +74,42 @@ typedef struct usb_transfer {
 	int direction;
 	int pipeid;
 
-	/* Used only for URBs handling */
+	usb_drvType_t recipient;
+
+	/* Used only for URBs handling (recipient other than hcd) */
 	idnode_t linkage;
 	int state;
 	int refcnt;
-	unsigned long rid;
-	unsigned int port;
-	pid_t pid;
-	msg_t msg;
+	union {
+		struct {
+			size_t osize;
+			void *odata;
+
+			unsigned long rid;
+			unsigned int port;
+			pid_t pid;
+		} extrn;
+		struct {
+			handle_t *finishedCond;
+			usb_driver_t *drv;
+		} intrn;
+	};
 
 	struct _usb_dev *hub;
 
 	void *hcdpriv;
-} usb_transfer_t;
+
+	/* URB transfer on completion callbacks */
+	const usb_transferOps_t *ops;
+};
 
 
 #define USB_LOG(fmt, ...) do { printf(fmt, ##__VA_ARGS__); } while (0);
+
+#define USB_TRACE(fmt, ...) \
+	if (0) { \
+		printf("usb, %s: " fmt "\n", __func__ __VA_OPT__(, ) __VA_ARGS__); \
+	}
 
 
 int usb_memInit(void);
@@ -96,7 +133,7 @@ void usb_freeAligned(void *addr, size_t size);
 void usb_transferFinished(usb_transfer_t *t, int status);
 
 
-int usb_transferCheck(usb_transfer_t *t);
+bool usb_transferCheck(usb_transfer_t *t);
 
 
 int usb_transferSubmit(usb_transfer_t *t, usb_pipe_t *pipe, handle_t *cond);
@@ -106,5 +143,9 @@ void usb_transferFree(usb_transfer_t *t);
 
 
 void usb_transferPut(usb_transfer_t *t);
+
+
+int usblibdrv_open(usb_driver_t *drv, usb_devinfo_t *dev, usb_transfer_type_t type, usb_dir_t dir);
+
 
 #endif

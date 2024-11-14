@@ -165,6 +165,7 @@ static int hub_interruptInit(usb_dev_t *hub)
 	t->direction = usb_dir_in;
 	t->size = (hub->nports / 8) + 1;
 	t->hub = hub;
+	t->recipient = usb_drvType_hcd;
 
 	hub->statusTransfer = t;
 
