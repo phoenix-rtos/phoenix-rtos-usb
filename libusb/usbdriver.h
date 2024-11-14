@@ -6,8 +6,8 @@
  *
  * libusb/usbdriver.h
  *
- * Copyright 2021 Phoenix Systems
- * Author: Maciej Purski
+ * Copyright 2021, 2024 Phoenix Systems
+ * Author: Maciej Purski, Adam Greloch
  *
  * This file is part of Phoenix-RTOS.
  *
@@ -24,6 +24,11 @@
 #include <posix/idtree.h>
 
 #define USBDRV_ANY ((unsigned)-1)
+
+
+/* clang-format off */
+typedef enum { usb_drvType_none = 0, usb_drvType_hcd, usb_drvType_intrn, usb_drvType_extrn } usb_drvType_t;
+/* clang-format on */
 
 
 enum {
@@ -161,7 +166,7 @@ typedef struct {
 
 
 typedef struct {
-	int (*init)(usb_driver_t *driver);
+	int (*init)(usb_driver_t *driver, void *args);
 	int (*destroy)(usb_driver_t *driver);
 } usb_driverOps_t;
 
@@ -179,13 +184,17 @@ typedef struct {
 
 
 struct usb_driver {
-	const usb_handlers_t *handlers;
-	const usb_driverOps_t *ops;
+	usb_driver_t *next, *prev;
+
+	char name[10];
+	usb_handlers_t handlers;
+	usb_driverOps_t ops;
 	const usb_pipeOps_t *pipeOps;
 	const usb_device_id_t *filters;
 	unsigned int nfilters;
-	uintptr_t *priv;
-	uintptr_t *pipePriv;
+
+	void *priv;
+	void *hostPriv;
 };
 
 
@@ -193,9 +202,6 @@ int usb_modeswitchHandle(usb_driver_t *drv, usb_devinfo_t *dev, const usb_modesw
 
 
 const usb_modeswitch_t *usb_modeswitchFind(uint16_t vid, uint16_t pid, const usb_modeswitch_t *modes, int nmodes);
-
-
-int usb_procDrvRun(usb_driver_t *driver);
 
 
 int usb_eventsWait(int port, msg_t *msg);
@@ -238,6 +244,12 @@ void usb_dumpEndpointDesc(FILE *stream, usb_endpoint_desc_t *descr);
 
 
 void usb_dumpStringDesc(FILE *stream, usb_string_desc_t *descr);
+
+
+void usb_driverRegister(usb_driver_t *driver);
+
+
+usb_driver_t *usb_registeredDriverPop(void);
 
 
 #endif /* _USBDRIVER_H_ */
