@@ -18,7 +18,6 @@
 #include <stdlib.h>
 #include <sys/list.h>
 #include <sys/minmax.h>
-#include <sys/msg.h>
 #include <sys/threads.h>
 #include <sys/types.h>
 #include <string.h>

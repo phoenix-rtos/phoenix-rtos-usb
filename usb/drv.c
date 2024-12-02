@@ -555,6 +555,7 @@ static int _usb_handleUrbcmd(usb_drvpriv_t *drv, usb_urbcmd_t *urbcmd)
 }
 
 
+#ifndef USB_INTERNAL_ONLY
 int usb_handleUrbcmd(msg_t *msg)
 {
 	int ret;
@@ -648,6 +649,7 @@ int usb_handleUrb(msg_t *msg, unsigned int port, unsigned long rid)
 
 	return ret;
 }
+#endif
 
 
 void usb_drvPipeFree(usb_drvpriv_t *drv, usb_pipe_t *pipe)

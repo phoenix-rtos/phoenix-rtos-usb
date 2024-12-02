@@ -15,7 +15,6 @@
 #define _USB_HOST_H_
 
 #include <sys/types.h>
-#include <sys/msg.h>
 #include <usbdriver.h>
 #include <usb.h>
 

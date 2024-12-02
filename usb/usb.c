@@ -16,7 +16,6 @@
 #include <errno.h>
 #include <sys/list.h>
 #include <sys/mman.h>
-#include <sys/msg.h>
 #include <sys/platform.h>
 #include <sys/types.h>
 #include <sys/threads.h>
@@ -29,6 +28,7 @@
 #include <unistd.h>
 
 #include <usbdriver.h>
+#include <sys/msg.h>
 
 #include "drv.h"
 #include "hcd.h"
@@ -40,14 +40,17 @@
 
 
 static struct {
-	char stack[N_STATUSTHRS][2048] __attribute__((aligned(8)));
+#ifndef USB_INTERNAL_ONLY
+	char ustack[2048] __attribute__((aligned(8)));
+	uint32_t port;
+#endif
+	char stack[N_STATUSTHRS - 1][2048] __attribute__((aligned(8)));
 	handle_t transferLock;
 	handle_t finishedCond;
 	hcd_t *hcds;
 	usb_drvpriv_t *drvs;
 	usb_transfer_t *finished;
 	int nhcd;
-	uint32_t port;
 } usb_common;
 
 
@@ -183,11 +186,11 @@ void usb_transferFinished(usb_transfer_t *t, int status)
 }
 
 
+#ifndef USB_INTERNAL_ONLY
 static int usb_devsList(char *buffer, size_t size)
 {
 	return 0;
 }
-
 
 
 static int usb_handleConnect(msg_t *msg, usb_connect_t *c)
@@ -284,28 +287,6 @@ static void usb_urbSyncCompleted(usb_transfer_t *t)
 }
 
 
-static void usb_statusthr(void *arg)
-{
-	usb_transfer_t *t;
-
-	for (;;) {
-		mutexLock(usb_common.transferLock);
-		while (usb_common.finished == NULL)
-			condWait(usb_common.finishedCond, usb_common.transferLock, 0);
-		t = usb_common.finished;
-		LIST_REMOVE(&usb_common.finished, t);
-		mutexUnlock(usb_common.transferLock);
-
-		if (t->async) {
-			t->ops->urbAsyncCompleted(t);
-		}
-		else {
-			t->ops->urbSyncCompleted(t);
-		}
-	}
-}
-
-
 static void usb_msgthr(void *arg)
 {
 	unsigned port = (int)arg;
@@ -362,9 +343,46 @@ static void usb_msgthr(void *arg)
 }
 
 
+static usb_transferOps_t usbprocdrv_transferOps = {
+	.urbSyncCompleted = usb_urbSyncCompleted,
+	.urbAsyncCompleted = usb_urbAsyncCompleted,
+};
+
+
+const usb_transferOps_t *usbprocdrv_transferOpsGet(void)
+{
+	return &usbprocdrv_transferOps;
+}
+#endif
+
+
+static void usb_statusthr(void *arg)
+{
+	usb_transfer_t *t;
+
+	for (;;) {
+		mutexLock(usb_common.transferLock);
+		while (usb_common.finished == NULL)
+			condWait(usb_common.finishedCond, usb_common.transferLock, 0);
+		t = usb_common.finished;
+		LIST_REMOVE(&usb_common.finished, t);
+		mutexUnlock(usb_common.transferLock);
+
+		if (t->async) {
+			t->ops->urbAsyncCompleted(t);
+		}
+		else {
+			t->ops->urbSyncCompleted(t);
+		}
+	}
+}
+
+
 int main(int argc, char *argv[])
 {
+#ifndef USB_INTERNAL_ONLY
 	oid_t oid;
+#endif
 	int i;
 	usb_driver_t *drv;
 
@@ -409,6 +427,7 @@ int main(int argc, char *argv[])
 		return 1;
 	}
 
+#ifndef USB_INTERNAL_ONLY
 	if (portCreate(&usb_common.port) != 0) {
 		USB_LOG("usb: Can't create port!\n");
 		return 1;
@@ -422,16 +441,21 @@ int main(int argc, char *argv[])
 		return 1;
 	}
 
-	for (i = 0; i < N_STATUSTHRS; i++) {
+	if (beginthread(usb_msgthr, MSGTHR_PRIO, &usb_common.ustack, sizeof(usb_common.ustack), (void *)usb_common.port) != 0) {
+		USB_LOG("usb: Fail to run msgthr!\n");
+		return 1;
+	}
+#endif
+
+	for (i = 0; i < N_STATUSTHRS - 1; i++) {
 		if (beginthread(usb_statusthr, STATUSTHR_PRIO, &usb_common.stack[i], sizeof(usb_common.stack[i]), NULL) != 0) {
 			USB_LOG("usb: Fail to init hub driver!\n");
 			return 1;
 		}
 	}
 
-	priority(MSGTHR_PRIO);
-
-	usb_msgthr((void *)usb_common.port);
+	priority(STATUSTHR_PRIO);
+	usb_statusthr(NULL);
 
 	return 0;
 }
@@ -455,16 +479,4 @@ int usblibdrv_open(usb_driver_t *drv, usb_devinfo_t *dev, usb_transfer_type_t ty
 	}
 
 	return pipe;
-}
-
-
-static usb_transferOps_t usbprocdrv_transferOps = {
-	.urbSyncCompleted = usb_urbSyncCompleted,
-	.urbAsyncCompleted = usb_urbAsyncCompleted,
-};
-
-
-const usb_transferOps_t *usbprocdrv_transferOpsGet(void)
-{
-	return &usbprocdrv_transferOps;
 }
