@@ -153,7 +153,7 @@ static int hcd_roothubInit(hcd_t *hcd)
 	hub->port = 1;
 	hub->hcd = hcd;
 
-	return usb_devEnumerate(hub);
+	return EOK;
 }
 
 
@@ -162,31 +162,42 @@ hcd_t *hcd_init(void)
 	const hcd_info_t *info;
 	const hcd_ops_t *ops;
 	hcd_t *hcd, *res = NULL;
-	int nhcd, i;
+	int nhcd, i, ret;
 	int num = 1;
 
 	if ((nhcd = hcd_getInfo(&info)) <= 0)
 		return NULL;
 
 	for (i = 0; i < nhcd; i++) {
-		if ((ops = hcd_lookup(info[i].type)) == NULL) {
+		ops = hcd_lookup(info[i].type);
+		if (ops == NULL) {
 			USB_LOG("usb-hcd: No ops found for hcd type %s\n", info[i].type);
 			continue;
 		}
 
-		if ((hcd = hcd_create(ops, &info[i], num++)) == NULL) {
+		hcd = hcd_create(ops, &info[i], num++);
+		if (hcd == NULL) {
 			USB_LOG("usb-hcd: Not enough memory to allocate hcd type: %s\n", info[i].type);
 			return res;
 		}
 
-		if (hcd->ops->init(hcd) != 0) {
+		ret = hcd_roothubInit(hcd);
+		if (ret != 0) {
+			USB_LOG("usb-hcd: Fail to initialize roothub: %s\n", info[i].type);
+			hcd_free(hcd);
+			continue;
+		}
+
+		ret = hcd->ops->init(hcd);
+		if (ret != 0) {
 			USB_LOG("usb-hcd: Fail to initialize hcd type: %s\n", info[i].type);
 			hcd_free(hcd);
 			continue;
 		}
 
-		if (hcd_roothubInit(hcd) != 0) {
-			USB_LOG("usb-hcd: Fail to initialize roothub: %s\n", info[i].type);
+		ret = usb_devEnumerate(hcd->roothub);
+		if (ret != 0) {
+			USB_LOG("usb-hcd: Fail to enumerate devices: %s\n", info[i].type);
 			hcd_free(hcd);
 			continue;
 		}
