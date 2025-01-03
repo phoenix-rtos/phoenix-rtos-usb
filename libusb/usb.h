@@ -59,6 +59,7 @@
 #define CLASS_REQ_SET_CONTROL_LINE_STATE 0x22
 
 /* class codes */
+#define USB_CLASS_HID          0x3
 #define USB_CLASS_MASS_STORAGE 0x8
 #define USB_CLASS_HUB          0x9
 
