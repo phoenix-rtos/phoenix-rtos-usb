@@ -368,11 +368,14 @@ int usb_drvBind(usb_dev_t *dev)
 			dev->ifs[i].driver = drv;
 			umsg->insertion.interface = i;
 			msgSend(drv->port, &msg);
+			if (msg.o.err == 0) {
+				return 0;
+			}
 		}
 		/* TODO: Make a device orphaned */
 	}
 
-	return 0;
+	return -1;
 }
 
 
