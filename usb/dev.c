@@ -372,14 +372,75 @@ static int usb_getStringDesc(usb_dev_t *dev, char **buf, int index)
 }
 
 
+#define USB_STRING_MAX_LEN 255
+
+
+static void usb_fallbackProductString(usb_dev_t *dev)
+{
+	char product[USB_STRING_MAX_LEN] = { 0 };
+
+	switch (dev->desc.bDeviceClass) {
+		case USB_CLASS_HID:
+			strcpy(product, "USB HID");
+			break;
+		case USB_CLASS_HUB:
+			switch (dev->desc.bDeviceProtocol) {
+				case USB_HUB_PROTO_ROOT:
+					strcpy(product, "USB Root Hub");
+					break;
+				case USB_HUB_PROTO_SINGLE_TT:
+					strcpy(product, "USB Single TT Hub");
+					break;
+				default:
+					strcpy(product, "USB Hub");
+					break;
+			}
+			break;
+		case USB_CLASS_MASS_STORAGE:
+			strcpy(product, "USB Mass Storage");
+			break;
+		default:
+			strcpy(product, "Unknown USB Device");
+			break;
+	}
+
+	dev->product = calloc(sizeof(char), strnlen(product, USB_STRING_MAX_LEN) + 1);
+	strcpy(dev->product, product);
+}
+
+
+static void usb_fallbackManufacturerString(usb_dev_t *dev)
+{
+	char manufacturer[] = "Generic";
+
+	dev->manufacturer = calloc(sizeof(char), strnlen(manufacturer, USB_STRING_MAX_LEN) + 1);
+	strcpy(dev->manufacturer, manufacturer);
+}
+
+
+static void usb_fallbackSerialNumberString(usb_dev_t *dev)
+{
+	char serialNumber[] = "Unknown";
+
+	dev->serialNumber = calloc(sizeof(char), strnlen(serialNumber, USB_STRING_MAX_LEN) + 1);
+	strcpy(dev->serialNumber, serialNumber);
+}
+
+
 static int usb_getAllStringDescs(usb_dev_t *dev)
 {
 	usb_string_desc_t desc = { 0 };
-	int i;
+	int i, ret;
 
+	/* Get an array of language ids */
+	/* String descriptors are optional. If a device omits all string descriptors,
+	 * it must not return this array, so the following call is allowed to fail in
+	 * that case */
 	if (usb_getDescriptor(dev, USB_DESC_STRING, 0, (char *)&desc, sizeof(desc)) < 0) {
-		USB_LOG("usb: Fail to get configuration descriptor\n");
-		return -1;
+		usb_fallbackManufacturerString(dev);
+		usb_fallbackProductString(dev);
+		usb_fallbackSerialNumberString(dev);
+		return -ENOTSUP;
 	}
 
 	if (desc.bLength < 4)
@@ -389,18 +450,24 @@ static int usb_getAllStringDescs(usb_dev_t *dev)
 	dev->langId = desc.wData[0] | ((uint16_t)desc.wData[1] << 8);
 
 	if (dev->desc.iManufacturer != 0) {
-		if (usb_getStringDesc(dev, &dev->manufacturer, dev->desc.iManufacturer) != 0)
-			return -ENOMEM;
+		ret = usb_getStringDesc(dev, &dev->manufacturer, dev->desc.iManufacturer);
+	}
+	if (dev->desc.iManufacturer == 0 || ret != 0) {
+		usb_fallbackManufacturerString(dev);
 	}
 
 	if (dev->desc.iProduct != 0) {
-		if (usb_getStringDesc(dev, &dev->product, dev->desc.iProduct) != 0)
-			return -ENOMEM;
+		ret = usb_getStringDesc(dev, &dev->product, dev->desc.iProduct);
+	}
+	if (dev->desc.iProduct == 0 || ret != 0) {
+		usb_fallbackProductString(dev);
 	}
 
 	if (dev->desc.iSerialNumber != 0) {
-		if (usb_getStringDesc(dev, &dev->serialNumber, dev->desc.iSerialNumber) != 0)
-			return -ENOMEM;
+		ret = usb_getStringDesc(dev, &dev->serialNumber, dev->desc.iSerialNumber);
+	}
+	if (dev->desc.iSerialNumber == 0 || ret != 0) {
+		usb_fallbackSerialNumberString(dev);
 	}
 
 	for (i = 0; i < dev->nifs; i++) {
@@ -418,7 +485,7 @@ static int usb_getAllStringDescs(usb_dev_t *dev)
 
 int usb_devEnumerate(usb_dev_t *dev)
 {
-	int addr, ret;
+	int addr;
 
 	if (usb_genLocationID(dev) < 0) {
 		USB_LOG("usb: Fail to generate location ID\n");
@@ -453,16 +520,13 @@ int usb_devEnumerate(usb_dev_t *dev)
 		return -1;
 	}
 
-	if (usb_getAllStringDescs(dev) < 0) {
-		USB_LOG("usb: Fail to get string descriptors\n");
-		return -1;
-	}
+	(void)usb_getAllStringDescs(dev);
 
 	if (!usb_isRoothub(dev))
 		usb_devSetChild(dev->hub, dev->port, dev);
 
 	USB_LOG("usb: New device addr: %d locationID: %08x %s, %s\n", dev->address, dev->locationID,
-		dev->manufacturer, dev->product);
+			dev->manufacturer, dev->product);
 
 	if (dev->desc.bDeviceClass == USB_CLASS_HUB) {
 		if (hub_conf(dev) != 0)
