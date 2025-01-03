@@ -29,6 +29,7 @@
 struct {
 	handle_t lock;
 	usb_drv_t *drvs;
+	handle_t drvAddedCond;
 } usbdrv_common;
 
 
@@ -251,11 +252,10 @@ static usb_drv_t *usb_drvMatchIface(usb_dev_t *dev, usb_iface_t *iface)
 	int i, match, bestmatch = 0;
 
 	mutexLock(usbdrv_common.lock);
-	drv = usbdrv_common.drvs;
-	if (drv == NULL) {
-		mutexUnlock(usbdrv_common.lock);
-		return NULL;
+	while (usbdrv_common.drvs == NULL) {
+		condWait(usbdrv_common.drvAddedCond, usbdrv_common.lock, 0);
 	}
+	drv = usbdrv_common.drvs;
 
 	do {
 		for (i = 0; i < drv->nfilters; i++) {
@@ -363,6 +363,9 @@ int usb_drvBind(usb_dev_t *dev)
 	umsg->insertion.descriptor = dev->desc;
 	umsg->insertion.locationID = dev->locationID;
 
+	/* FIXME: drvAdd races with drvMatchIface in multi-driver scenario.
+	 * Devices may become orphaned forever if they get added by hcd before the driver
+	 * is connected */
 	for (i = 0; i < dev->nifs; i++) {
 		if ((drv = usb_drvMatchIface(dev, &dev->ifs[i])) != NULL) {
 			dev->ifs[i].driver = drv;
@@ -417,6 +420,7 @@ void usb_drvAdd(usb_drv_t *drv)
 	idtree_init(&drv->pipes);
 	idtree_init(&drv->urbs);
 	LIST_ADD(&usbdrv_common.drvs, drv);
+	condSignal(usbdrv_common.drvAddedCond);
 	mutexUnlock(usbdrv_common.lock);
 }
 
@@ -617,8 +621,18 @@ void usb_drvPipeFree(usb_drv_t *drv, usb_pipe_t *pipe)
 
 int usb_drvInit(void)
 {
-	if (mutexCreate(&usbdrv_common.lock) != 0) {
+	int ret;
+
+	ret = mutexCreate(&usbdrv_common.lock);
+	if (ret != 0) {
 		USB_LOG("usbdrv: Can't create mutex!\n");
+		return -ENOMEM;
+	}
+
+	ret = condCreate(&usbdrv_common.drvAddedCond);
+	if (ret != 0) {
+		USB_LOG("usbdrv: Can't create cond!\n");
+		resourceDestroy(usbdrv_common.lock);
 		return -ENOMEM;
 	}
 
