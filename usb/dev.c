@@ -210,7 +210,6 @@ static int usb_getConfiguration(usb_dev_t *dev)
 
 	/* Get first nine bytes to get to know configuration len */
 	if (usb_getDescriptor(dev, USB_DESC_CONFIG, 0, (char *)&pre, sizeof(pre)) < 0) {
-		USB_LOG("usb: Fail to get configuration descriptor\n");
 		return -1;
 	}
 
@@ -224,7 +223,6 @@ static int usb_getConfiguration(usb_dev_t *dev)
 
 	/* TODO: Handle multiple configuration devices */
 	if (usb_getDescriptor(dev, USB_DESC_CONFIG, 0, (char *)conf, pre.wTotalLength) < 0) {
-		USB_LOG("usb: Fail to get configuration descriptor\n");
 		free(conf);
 		return -1;
 	}
@@ -420,7 +418,7 @@ static int usb_getAllStringDescs(usb_dev_t *dev)
 
 int usb_devEnumerate(usb_dev_t *dev)
 {
-	int addr;
+	int addr, ret;
 
 	if (usb_genLocationID(dev) < 0) {
 		USB_LOG("usb: Fail to generate location ID\n");
@@ -525,9 +523,11 @@ usb_dev_t *usb_devFind(usb_dev_t *hub, int locationID)
 }
 
 
-void usb_devDisconnected(usb_dev_t *dev)
+void usb_devDisconnected(usb_dev_t *dev, bool silent)
 {
-	printf("usb: Device disconnected addr %d locationID: %08x\n", dev->address, dev->locationID);
+	if (!silent) {
+		printf("usb: Device disconnected addr %d locationID: %08x\n", dev->address, dev->locationID);
+	}
 	usb_devSetChild(dev->hub, dev->port, NULL);
 	usb_devUnbind(dev);
 	usb_devDestroy(dev);

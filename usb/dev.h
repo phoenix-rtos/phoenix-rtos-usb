@@ -16,6 +16,7 @@
 #define _USB_DEV_H_
 
 #include <usb.h>
+#include <stdbool.h>
 
 #include "usbhost.h"
 
@@ -33,6 +34,8 @@ typedef struct {
 
 
 typedef struct _usb_dev {
+	struct _usb_dev *next, *prev;
+
 	enum usb_speed speed;
 	usb_device_desc_t desc;
 	usb_configuration_desc_t *conf;
@@ -71,7 +74,7 @@ usb_dev_t *usb_devAlloc(void);
 int usb_devEnumerate(usb_dev_t *dev);
 
 
-void usb_devDisconnected(usb_dev_t *dev);
+void usb_devDisconnected(usb_dev_t *dev, bool silent);
 
 
 int usb_devInit(void);
