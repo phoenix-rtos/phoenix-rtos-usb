@@ -37,6 +37,7 @@
 #define HUB_DEBOUNCE_STABLE  100000
 #define HUB_DEBOUNCE_PERIOD  25000
 #define HUB_DEBOUNCE_TIMEOUT 1500000
+#define HUB_TT_POLL_DELAY_MS 1000000
 
 
 typedef struct _hub_event {
@@ -50,6 +51,7 @@ struct {
 	handle_t lock;
 	handle_t cond;
 	hub_event_t *events;
+	usb_dev_t *tts;
 } hub_common;
 
 
@@ -170,7 +172,14 @@ static int hub_interruptInit(usb_dev_t *hub)
 }
 
 
-static int hub_poll(usb_dev_t *hub)
+static int hub_isTT(usb_dev_t *dev)
+{
+	/* TODO support MTTs */
+	return dev->desc.bDeviceClass == USB_CLASS_HUB && dev->desc.bDeviceProtocol == USB_HUB_PROTO_SINGLE_TT;
+}
+
+
+static int hub_requestStatus(usb_dev_t *hub)
 {
 	return usb_transferSubmit(hub->statusTransfer, hub->irqPipe, NULL);
 }
@@ -248,6 +257,31 @@ static int hub_portDebounce(usb_dev_t *hub, int port)
 }
 
 
+static void hub_ttAdd(usb_dev_t *hub)
+{
+	mutexLock(hub_common.lock);
+	LIST_ADD(&hub_common.tts, hub);
+	mutexUnlock(hub_common.lock);
+}
+
+
+static void hub_ttRemove(usb_dev_t *hub)
+{
+	mutexLock(hub_common.lock);
+	LIST_REMOVE(&hub_common.tts, hub);
+	mutexUnlock(hub_common.lock);
+}
+
+
+static void hub_devDisconnect(usb_dev_t *dev, bool silent)
+{
+	usb_devDisconnected(dev, silent);
+	if (hub_isTT(dev)) {
+		hub_ttRemove(dev);
+	}
+}
+
+
 static void hub_devConnected(usb_dev_t *hub, int port)
 {
 	usb_dev_t *dev;
@@ -284,7 +318,6 @@ static void hub_devConnected(usb_dev_t *hub, int port)
 			break;
 		}
 		else if (ret != 0) {
-			printf("usb: Enumeration failed retries left: %d\n", retries);
 			dev->hcd->ops->pipeDestroy(dev->hcd, dev->ctrlPipe);
 			if (dev->address != 0)
 				hcd_addrFree(hub->hcd, dev->address);
@@ -293,8 +326,10 @@ static void hub_devConnected(usb_dev_t *hub, int port)
 		}
 	} while (ret != 0 && retries > 0);
 
-	if (ret != 0)
-		usb_devDisconnected(dev);
+	if (ret != 0) {
+		printf("usb: Enumeration failed despite %d attempts\n", HUB_ENUM_RETRIES);
+		hub_devDisconnect(dev, true);
+	}
 }
 
 
@@ -302,14 +337,18 @@ static void hub_connectstatus(usb_dev_t *hub, int port, usb_port_status_t *statu
 {
 	int pstatus;
 
-	if (hub->devs[port - 1] != NULL)
-		usb_devDisconnected(hub->devs[port - 1]);
+	if (hub->devs[port - 1] != NULL) {
+		hub_devDisconnect(hub->devs[port - 1], false);
+	}
 
-	if ((pstatus = hub_portDebounce(hub, port)) < 0)
+	pstatus = hub_portDebounce(hub, port);
+	if (pstatus < 0) {
 		return;
+	}
 
-	if (pstatus)
+	if (pstatus) {
 		hub_devConnected(hub, port);
+	}
 }
 
 
@@ -348,10 +387,28 @@ static uint32_t hub_getStatus(usb_dev_t *hub)
 		if (hub->statusTransfer->error == 0 && hub->statusTransfer->transferred > 0)
 			memcpy(&status, hub->statusTransfer->buffer, sizeof(status));
 
-		hub_poll(hub);
+		hub_requestStatus(hub);
 	}
 
 	return status;
+}
+
+
+static void hub_ttStatus(void)
+{
+	usb_dev_t *hub;
+	int i;
+
+	hub = hub_common.tts;
+	if (hub == NULL) {
+		return;
+	}
+
+	do {
+		for (i = 0; i < hub->nports; i++) {
+			hub_portstatus(hub, i + 1);
+		}
+	} while ((hub = hub->next) != hub_common.tts);
 }
 
 
@@ -363,8 +420,10 @@ static void hub_thread(void *args)
 
 	for (;;) {
 		mutexLock(hub_common.lock);
-		while (hub_common.events == NULL)
-			condWait(hub_common.cond, hub_common.lock, 0);
+		while (hub_common.events == NULL) {
+			condWait(hub_common.cond, hub_common.lock, HUB_TT_POLL_DELAY_MS);
+			hub_ttStatus();
+		}
 		ev = hub_common.events;
 		LIST_REMOVE(&hub_common.events, ev);
 		mutexUnlock(hub_common.lock);
@@ -431,7 +490,16 @@ int hub_conf(usb_dev_t *hub)
 	if (hub_interruptInit(hub) != 0)
 		return -EINVAL;
 
-	return hub_poll(hub);
+	if (hub_isTT(hub)) {
+		// FIXME Interrupt pipe notifications from tier 2 TTs never come, which is
+		// either a quirk in currently tested hw or an issue in the hcd driver
+
+		// In addition to request an interrupt request, actively poll the status as well
+		// for as a workaround
+		hub_ttAdd(hub);
+	}
+
+	return hub_requestStatus(hub);
 }
 
 
