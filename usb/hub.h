@@ -53,6 +53,11 @@
 
 #define USB_HUB_MAX_PORTS 15
 
+/* hub-specific protocol codes */
+#define USB_HUB_PROTO_ROOT      0x0
+#define USB_HUB_PROTO_SINGLE_TT 0x1
+
+
 typedef struct usb_port_status {
 	uint16_t wPortStatus;
 	uint16_t wPortChange;
