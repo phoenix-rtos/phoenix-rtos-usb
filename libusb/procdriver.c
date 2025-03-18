@@ -65,18 +65,27 @@ static void usb_thread(void *arg)
 	usb_driver_t *drv = (usb_driver_t *)arg;
 	msg_t msg = { 0 };
 	usb_msg_t *umsg = (usb_msg_t *)&msg.i.raw;
+	usb_result_insertion_t result;
 	int ret;
+	msg_rid_t rid;
 
 	for (;;) {
-		ret = usb_eventsWait(usbprocdrv_common.drvport, &msg);
-		if (ret < 0) {
-			fprintf(stderr, "usbdrv: error when receiving event from host\n");
-			continue;
-		}
+		do {
+			ret = msgRecv(usbprocdrv_common.drvport, &msg, &rid);
+			if (ret < 0 && ret != -EINTR) {
+				fprintf(stderr, "usbdrv: error when receiving event from host\n");
+				continue;
+			}
+		} while (ret == -EINTR);
 
 		switch (umsg->type) {
 			case usb_msg_insertion:
-				drv->handlers.insertion(drv, &umsg->insertion);
+				ret = drv->handlers.insertion(drv, &umsg->insertion, &result);
+				if (ret == 0) {
+					fprintf(stderr, "usbdrv: %s created device: %s\n", drv->name, result.devpath);
+					memcpy(msg.o.raw, &result, sizeof(usb_result_insertion_t));
+					msg.o.err = 0;
+				}
 				break;
 			case usb_msg_deletion:
 				drv->handlers.deletion(drv, &umsg->deletion);
@@ -87,6 +96,11 @@ static void usb_thread(void *arg)
 			default:
 				fprintf(stderr, "usbdrv: unknown msg type\n");
 				break;
+		}
+
+		ret = msgRespond(usbprocdrv_common.drvport, &msg, rid);
+		if (ret < 0) {
+			fprintf(stderr, "usbdrv: error when replying to host\n");
 		}
 	}
 }
@@ -145,24 +159,6 @@ int usb_driverProcRun(usb_driver_t *drv, void *args)
 
 	priority(USB_UMSG_PRIO);
 	usb_thread(drv);
-
-	return 0;
-}
-
-
-int usb_eventsWait(int port, msg_t *msg)
-{
-	msg_rid_t rid;
-	int err;
-
-	do {
-		err = msgRecv(port, msg, &rid);
-		if (err < 0 && err != -EINTR)
-			return -1;
-	} while (err == -EINTR);
-
-	if (msgRespond(port, msg, rid) < 0)
-		return -1;
 
 	return 0;
 }

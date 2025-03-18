@@ -357,7 +357,7 @@ int usb_drvUnbind(usb_drvpriv_t *drv, usb_dev_t *dev, int iface)
 }
 
 
-int usb_drvBind(usb_dev_t *dev)
+int usb_drvBind(usb_dev_t *dev, usb_result_insertion_t *result)
 {
 	usb_drvpriv_t *drv;
 
@@ -383,12 +383,16 @@ int usb_drvBind(usb_dev_t *dev)
 
 			switch (drv->type) {
 				case usb_drvType_intrn:
-					err = drv->driver.handlers.insertion(&drv->driver, &umsg->insertion);
+					err = drv->driver.handlers.insertion(&drv->driver, &umsg->insertion, result);
 					break;
 				case usb_drvType_extrn:
 					err = msgSend(drv->extrn.port, &msg);
 					if (err == 0) {
 						err = msg.o.err;
+					}
+
+					if (err == 0) {
+						memcpy(result, msg.o.raw, sizeof(usb_result_insertion_t));
 					}
 					break;
 				default:

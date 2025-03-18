@@ -146,13 +146,19 @@ typedef struct {
 } usb_modeswitch_t;
 
 
+typedef struct {
+	bool deviceCreated;
+	char devpath[32];
+} usb_result_insertion_t;
+
+
 typedef struct usb_driver usb_driver_t;
 
 
 typedef int (*usb_completion_handler_t)(usb_driver_t *drv, usb_completion_t *completion, const char *data, size_t len);
 
 
-typedef int (*usb_insertion_handler_t)(usb_driver_t *drv, usb_devinfo_t *devinfo);
+typedef int (*usb_insertion_handler_t)(usb_driver_t *drv, usb_devinfo_t *devinfo, usb_result_insertion_t *result);
 
 
 typedef int (*usb_deletion_handler_t)(usb_driver_t *drv, usb_deletion_t *deletion);
@@ -202,9 +208,6 @@ int usb_modeswitchHandle(usb_driver_t *drv, usb_devinfo_t *dev, const usb_modesw
 
 
 const usb_modeswitch_t *usb_modeswitchFind(uint16_t vid, uint16_t pid, const usb_modeswitch_t *modes, int nmodes);
-
-
-int usb_eventsWait(int port, msg_t *msg);
 
 
 int usb_open(usb_driver_t *drv, usb_devinfo_t *dev, usb_transfer_type_t type, usb_dir_t dir);
