@@ -58,7 +58,7 @@ void usb_libDrvDestroy(usb_driver_t *drv);
 void usb_drvAdd(usb_drvpriv_t *drv);
 
 
-int usb_drvBind(usb_dev_t *dev);
+int usb_drvBind(usb_dev_t *dev, usb_result_insertion_t *result);
 
 
 int usb_drvUnbind(usb_drvpriv_t *drv, usb_dev_t *dev, int iface);
