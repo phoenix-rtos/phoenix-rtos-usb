@@ -23,6 +23,9 @@
 #include <sys/msg.h>
 #include <posix/idtree.h>
 
+#define USB_DRVNAME_MAX 10
+#define USB_STR_MAX     255
+
 #define USBDRV_ANY ((unsigned)-1)
 
 
@@ -146,13 +149,23 @@ typedef struct {
 } usb_modeswitch_t;
 
 
+typedef struct {
+	bool deviceCreated; /* Set to true by the insertion handler if a device file for the inserted device has been created */
+	char devPath[32];   /* Path to device file */
+} usb_event_insertion_t;
+
+
 typedef struct usb_driver usb_driver_t;
 
 
 typedef int (*usb_completion_handler_t)(usb_driver_t *drv, usb_completion_t *completion, const char *data, size_t len);
 
 
-typedef int (*usb_insertion_handler_t)(usb_driver_t *drv, usb_devinfo_t *devinfo);
+/*
+ * Returns 0 if insertion succeeds. Implementations can assume `event` is a valid pointer provided by the caller.
+ * The event struct is populated only if insertion succeeds (its contents must be valid after the call)
+ */
+typedef int (*usb_insertion_handler_t)(usb_driver_t *drv, usb_devinfo_t *devinfo, usb_event_insertion_t *event);
 
 
 typedef int (*usb_deletion_handler_t)(usb_driver_t *drv, usb_deletion_t *deletion);
@@ -186,7 +199,7 @@ typedef struct {
 struct usb_driver {
 	usb_driver_t *next, *prev;
 
-	char name[10];
+	char name[USB_DRVNAME_MAX];
 	usb_handlers_t handlers;
 	usb_driverOps_t ops;
 	const usb_pipeOps_t *pipeOps;
@@ -202,9 +215,6 @@ int usb_modeswitchHandle(usb_driver_t *drv, usb_devinfo_t *dev, const usb_modesw
 
 
 const usb_modeswitch_t *usb_modeswitchFind(uint16_t vid, uint16_t pid, const usb_modeswitch_t *modes, int nmodes);
-
-
-int usb_eventsWait(int port, msg_t *msg);
 
 
 int usb_open(usb_driver_t *drv, usb_devinfo_t *dev, usb_transfer_type_t type, usb_dir_t dir);

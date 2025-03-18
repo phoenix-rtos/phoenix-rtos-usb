@@ -486,7 +486,8 @@ static int usb_getAllStringDescs(usb_dev_t *dev)
 
 int usb_devEnumerate(usb_dev_t *dev)
 {
-	int addr;
+	int addr, iface;
+	usb_event_insertion_t insertion = { 0 };
 
 	if (usb_genLocationID(dev) < 0) {
 		USB_LOG("usb: Fail to generate location ID\n");
@@ -533,9 +534,13 @@ int usb_devEnumerate(usb_dev_t *dev)
 		if (hub_conf(dev) != 0)
 			return -1;
 	}
-	else if (usb_drvBind(dev) != 0) {
+	else if (usb_drvBind(dev, &insertion, &iface) != 0) {
 		USB_LOG("usb: Fail to match drivers for device\n");
 		/* TODO: make device orphaned */
+	}
+
+	if (insertion.deviceCreated) {
+		fprintf(stderr, "usb: Driver bound to device with addr %d: %s\n", dev->address, insertion.devPath);
 	}
 
 	return 0;
