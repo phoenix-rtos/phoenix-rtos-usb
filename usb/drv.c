@@ -206,52 +206,6 @@ int usb_drvTransfer(usb_drvpriv_t *drv, usb_transfer_t *t, int pipeId)
 }
 
 
-static int usb_drvcmp(usb_device_desc_t *dev, usb_interface_desc_t *iface, const usb_device_id_t *filter)
-{
-	int match = usbdrv_match;
-
-	if (filter->dclass != USBDRV_ANY) {
-		if ((dev->bDeviceClass != 0 && dev->bDeviceClass == filter->dclass) ||
-				(dev->bDeviceClass == 0 && iface->bInterfaceClass == filter->dclass))
-			match |= usbdrv_class_match;
-		else
-			return usbdrv_nomatch;
-	}
-
-	if (filter->subclass != USBDRV_ANY) {
-		if ((dev->bDeviceSubClass != 0 && dev->bDeviceSubClass == filter->subclass) ||
-				(dev->bDeviceSubClass == 0 && iface->bInterfaceSubClass == filter->subclass))
-			match |= usbdrv_subclass_match;
-		else
-			return usbdrv_nomatch;
-	}
-
-	if (filter->protocol != USBDRV_ANY) {
-		if ((dev->bDeviceProtocol != 0 && dev->bDeviceProtocol == filter->protocol) ||
-				(dev->bDeviceProtocol == 0 && iface->bInterfaceProtocol == filter->protocol))
-			match |= usbdrv_protocol_match;
-		else
-			return usbdrv_nomatch;
-	}
-
-	if (filter->vid != USBDRV_ANY) {
-		if (dev->idVendor == filter->vid)
-			match |= usbdrv_vid_match;
-		else
-			return usbdrv_nomatch;
-	}
-
-	if (filter->pid != USBDRV_ANY) {
-		if (dev->idProduct == filter->pid)
-			match |= usbdrv_pid_match;
-		else
-			return usbdrv_nomatch;
-	}
-
-	return match;
-}
-
-
 static usb_drvpriv_t *usb_drvMatchIface(usb_dev_t *dev, usb_iface_t *iface)
 {
 	usb_drvpriv_t *drv, *best = NULL;
@@ -265,8 +219,7 @@ static usb_drvpriv_t *usb_drvMatchIface(usb_dev_t *dev, usb_iface_t *iface)
 
 	do {
 		for (i = 0; i < drv->driver.nfilters; i++) {
-			match = usb_drvcmp(&dev->desc, iface->desc, &drv->driver.filters[i]);
-
+			match = usb_devFilterMatch(&dev->desc, iface->desc, &drv->driver.filters[i]);
 			if (match > bestmatch) {
 				bestmatch = match;
 				best = drv;
@@ -360,7 +313,7 @@ int usb_drvUnbind(usb_drvpriv_t *drv, usb_dev_t *dev, int iface)
 }
 
 
-int usb_drvBind(usb_dev_t *dev, usb_result_insertion_t *result)
+int usb_drvBind(usb_dev_t *dev, usb_event_insertion_t *event, int *iface)
 {
 	usb_drvpriv_t *drv;
 
@@ -383,10 +336,11 @@ int usb_drvBind(usb_dev_t *dev, usb_result_insertion_t *result)
 		if (drv != NULL) {
 			dev->ifs[i].driver = drv;
 			umsg->insertion.interface = i;
+			*iface = i;
 
 			switch (drv->type) {
 				case usb_drvType_intrn:
-					err = drv->driver.handlers.insertion(&drv->driver, &umsg->insertion, result);
+					err = drv->driver.handlers.insertion(&drv->driver, &umsg->insertion, event);
 					break;
 				case usb_drvType_extrn:
 					err = msgSend(drv->extrn.port, &msg);
@@ -395,7 +349,7 @@ int usb_drvBind(usb_dev_t *dev, usb_result_insertion_t *result)
 					}
 
 					if (err == 0) {
-						memcpy(result, msg.o.raw, sizeof(usb_result_insertion_t));
+						memcpy(event, msg.o.raw, sizeof(usb_event_insertion_t));
 					}
 					break;
 				default:

@@ -41,10 +41,8 @@
 
 
 static struct {
-#ifndef USB_INTERNAL_ONLY
 	char ustack[2048] __attribute__((aligned(8)));
 	uint32_t port;
-#endif
 	char stack[N_STATUSTHRS - 1][2048] __attribute__((aligned(8)));
 	handle_t transferLock;
 	handle_t finishedCond;
@@ -187,13 +185,13 @@ void usb_transferFinished(usb_transfer_t *t, int status)
 }
 
 
-#ifndef USB_INTERNAL_ONLY
 static int usb_devsList(char *buffer, size_t size)
 {
 	return 0;
 }
 
 
+#ifndef USB_INTERNAL_ONLY
 static int usb_handleConnect(msg_t *msg, usb_connect_t *c)
 {
 	usb_drvpriv_t *drv;
@@ -286,6 +284,7 @@ static void usb_urbSyncCompleted(usb_transfer_t *t)
 	msgRespond(usb_common.port, &msg, t->extrn.rid);
 	usb_transferFree(t);
 }
+#endif /* USB_INTERNAL_ONLY */
 
 
 static void usb_msgthr(void *arg)
@@ -294,13 +293,15 @@ static void usb_msgthr(void *arg)
 	msg_rid_t rid;
 	msg_t msg;
 	usb_msg_t *umsg;
-	int resp;
+	bool respond;
 	int ret;
 
 	for (;;) {
-		if (msgRecv(port, &msg, &rid) < 0)
+		ret = msgRecv(port, &msg, &rid);
+		if (ret < 0) {
 			continue;
-		resp = 1;
+		}
+		respond = true;
 		switch (msg.type) {
 			case mtRead:
 				msg.o.err = usb_devsList(msg.o.data, msg.o.size);
@@ -308,6 +309,7 @@ static void usb_msgthr(void *arg)
 			case mtDevCtl:
 				umsg = (usb_msg_t *)msg.i.raw;
 				switch (umsg->type) {
+#ifndef USB_INTERNAL_ONLY
 					case usb_msg_connect:
 						msg.o.err = usb_handleConnect(&msg, &umsg->connect);
 						break;
@@ -318,7 +320,7 @@ static void usb_msgthr(void *arg)
 						ret = usb_handleUrb(&msg, port, rid);
 						if (umsg->urb.sync && ret == 0) {
 							/* Block the sender until the transfer finishes */
-							resp = 0;
+							respond = false;
 						}
 						else {
 							msg.o.err = ret;
@@ -327,6 +329,7 @@ static void usb_msgthr(void *arg)
 					case usb_msg_urbcmd:
 						msg.o.err = usb_handleUrbcmd(&msg);
 						break;
+#endif
 					default:
 						msg.o.err = -EINVAL;
 						log_error("unsupported usb_msg type: %d\n", umsg->type);
@@ -338,12 +341,14 @@ static void usb_msgthr(void *arg)
 				log_error("unsupported msg type\n");
 		}
 
-		if (resp)
+		if (respond) {
 			msgRespond(port, &msg, rid);
+		}
 	}
 }
 
 
+#ifndef USB_INTERNAL_ONLY
 static usb_transferOps_t usbprocdrv_transferOps = {
 	.urbSyncCompleted = usb_urbSyncCompleted,
 	.urbAsyncCompleted = usb_urbAsyncCompleted,
@@ -381,9 +386,7 @@ static void usb_statusthr(void *arg)
 
 int main(int argc, char *argv[])
 {
-#ifndef USB_INTERNAL_ONLY
 	oid_t oid;
-#endif
 	int i;
 	usb_driver_t *drv;
 
@@ -428,7 +431,6 @@ int main(int argc, char *argv[])
 		return 1;
 	}
 
-#ifndef USB_INTERNAL_ONLY
 	if (portCreate(&usb_common.port) != 0) {
 		log_error("Can't create port!\n");
 		return 1;
@@ -446,7 +448,6 @@ int main(int argc, char *argv[])
 		log_error("Fail to run msgthr!\n");
 		return 1;
 	}
-#endif
 
 	for (i = 0; i < N_STATUSTHRS - 1; i++) {
 		if (beginthread(usb_statusthr, STATUSTHR_PRIO, &usb_common.stack[i], sizeof(usb_common.stack[i]), NULL) != 0) {

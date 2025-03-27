@@ -12,15 +12,19 @@
  */
 
 
+#include <assert.h>
 #include <errno.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/threads.h>
+#include <sys/minmax.h>
 #include <sys/list.h>
+#include <posix/utils.h>
 
 #include <usb.h>
+#include <usbdriver.h>
 
 #include "usbhost.h"
 #include "dev.h"
@@ -30,6 +34,7 @@
 #include "log.h"
 
 #define USBDEV_BUF_SIZE 0x200
+
 
 struct {
 	handle_t lock;
@@ -485,18 +490,69 @@ static int usb_getAllStringDescs(usb_dev_t *dev)
 }
 
 
+int usb_devFilterMatch(usb_device_desc_t *dev, usb_interface_desc_t *iface, const usb_device_id_t *filter)
+{
+	int match = usbdrv_match;
+
+	if (filter->dclass != USBDRV_ANY) {
+		if ((dev->bDeviceClass != 0 && dev->bDeviceClass == filter->dclass) ||
+				(dev->bDeviceClass == 0 && iface->bInterfaceClass == filter->dclass))
+			match |= usbdrv_class_match;
+		else {
+			return usbdrv_nomatch;
+		}
+	}
+
+	if (filter->subclass != USBDRV_ANY) {
+		if ((dev->bDeviceSubClass != 0 && dev->bDeviceSubClass == filter->subclass) ||
+				(dev->bDeviceSubClass == 0 && iface->bInterfaceSubClass == filter->subclass))
+			match |= usbdrv_subclass_match;
+		else {
+			return usbdrv_nomatch;
+		}
+	}
+
+	if (filter->protocol != USBDRV_ANY) {
+		if ((dev->bDeviceProtocol != 0 && dev->bDeviceProtocol == filter->protocol) ||
+				(dev->bDeviceProtocol == 0 && iface->bInterfaceProtocol == filter->protocol))
+			match |= usbdrv_protocol_match;
+		else {
+			return usbdrv_nomatch;
+		}
+	}
+
+	if (filter->vid != USBDRV_ANY) {
+		if (dev->idVendor == filter->vid)
+			match |= usbdrv_vid_match;
+		else {
+			return usbdrv_nomatch;
+		}
+	}
+
+	if (filter->pid != USBDRV_ANY) {
+		if (dev->idProduct == filter->pid)
+			match |= usbdrv_pid_match;
+		else {
+			return usbdrv_nomatch;
+		}
+	}
+
+	return match;
+}
+
+
 int usb_devEnumerate(usb_dev_t *dev)
 {
-	int addr;
-	usb_result_insertion_t result = { 0 };
+	int addr, iface;
+	usb_event_insertion_t insertion = { 0 };
 
 	if (usb_genLocationID(dev) < 0) {
-		log_msg("Fail to generate location ID\n");
+		log_error("Fail to generate location ID\n");
 		return -1;
 	}
 
 	if (usb_getDevDesc(dev) < 0) {
-		log_msg("Fail to get device descriptor\n");
+		log_error("Fail to get device descriptor\n");
 		return -1;
 	}
 
@@ -532,16 +588,20 @@ int usb_devEnumerate(usb_dev_t *dev)
 			dev->manufacturer, dev->product);
 
 	if (dev->desc.bDeviceClass == USB_CLASS_HUB) {
-		if (hub_conf(dev) != 0)
-			return -1;
+		return hub_conf(dev);
 	}
-	else if (usb_drvBind(dev, &result) != 0) {
-		log_msg("Fail to match drivers for device\n");
+
+	if (usb_drvBind(dev, &insertion, &iface) != 0) {
+		log_error("Fail to match drivers for device\n");
 		/* TODO: make device orphaned */
 	}
 
-	if (result.deviceCreated) {
-		log_msg("Driver bound to device with addr %d: %s\n", dev->address, result.devpath);
+	if (insertion.deviceCreated) {
+		log_msg("Dev oid bound to device with addr %d: port=%d, id=%d\n",
+				dev->address, insertion.dev.port, insertion.dev.id);
+
+		dev->oid = insertion.dev;
+		strncpy(dev->devPath, insertion.devPath, sizeof(dev->devPath));
 	}
 
 	return 0;
@@ -553,13 +613,15 @@ static void usb_devUnbind(usb_dev_t *dev)
 	int i;
 
 	for (i = 0; i < dev->nports; i++) {
-		if (dev->devs[i] != NULL)
+		if (dev->devs[i] != NULL) {
 			usb_devUnbind(dev->devs[i]);
+		}
 	}
 
 	for (i = 0; i < dev->nifs; i++) {
-		if (dev->ifs[i].driver)
+		if (dev->ifs[i].driver != NULL) {
 			usb_drvUnbind(dev->ifs[i].driver, dev, i);
+		}
 	}
 }
 

@@ -22,8 +22,9 @@
 #include <stdbool.h>
 #include <sys/msg.h>
 #include <posix/idtree.h>
+#include <sys/rb.h>
 
-#define USBDRV_ANY ((unsigned)-1)
+#include "usbcommon.h"
 
 
 /* clang-format off */
@@ -40,15 +41,6 @@ enum {
 	usbdrv_vid_match = 0x10,
 	usbdrv_pid_match = 0x20
 };
-
-
-typedef struct {
-	unsigned vid;
-	unsigned pid;
-	unsigned dclass;
-	unsigned subclass;
-	unsigned protocol;
-} usb_device_id_t;
 
 
 typedef struct {
@@ -148,8 +140,8 @@ typedef struct {
 
 typedef struct {
 	bool deviceCreated;
-	char devpath[32];
-} usb_result_insertion_t;
+	char devPath[32];
+} usb_event_insertion_t;
 
 
 typedef struct usb_driver usb_driver_t;
@@ -158,7 +150,7 @@ typedef struct usb_driver usb_driver_t;
 typedef int (*usb_completion_handler_t)(usb_driver_t *drv, usb_completion_t *completion, const char *data, size_t len);
 
 
-typedef int (*usb_insertion_handler_t)(usb_driver_t *drv, usb_devinfo_t *devinfo, usb_result_insertion_t *result);
+typedef int (*usb_insertion_handler_t)(usb_driver_t *drv, usb_devinfo_t *devinfo, usb_event_insertion_t *event);
 
 
 typedef int (*usb_deletion_handler_t)(usb_driver_t *drv, usb_deletion_t *deletion);
@@ -192,7 +184,7 @@ typedef struct {
 struct usb_driver {
 	usb_driver_t *next, *prev;
 
-	char name[10];
+	char name[USB_DRVNAME_MAX];
 	usb_handlers_t handlers;
 	usb_driverOps_t ops;
 	const usb_pipeOps_t *pipeOps;

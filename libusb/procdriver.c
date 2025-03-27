@@ -19,6 +19,7 @@
 
 #include <usbdriver.h>
 #include <usbprocdriver.h>
+#include <usbinternal.h>
 
 #include "log.h"
 
@@ -46,32 +47,12 @@ static struct {
 } usbprocdrv_common;
 
 
-static void usb_hostLookup(oid_t *oid)
-{
-	int ret;
-
-	for (;;) {
-		ret = lookup("devfs/usb", NULL, oid);
-		if (ret >= 0) {
-			break;
-		}
-
-		ret = lookup("/dev/usb", NULL, oid);
-		if (ret >= 0) {
-			break;
-		}
-
-		usleep(1000000);
-	}
-}
-
-
 static void usb_thread(void *arg)
 {
 	usb_driver_t *drv = (usb_driver_t *)arg;
 	msg_t msg = { 0 };
 	usb_msg_t *umsg = (usb_msg_t *)&msg.i.raw;
-	usb_result_insertion_t result;
+	usb_event_insertion_t event;
 	int ret;
 	msg_rid_t rid;
 
@@ -86,10 +67,9 @@ static void usb_thread(void *arg)
 
 		switch (umsg->type) {
 			case usb_msg_insertion:
-				ret = drv->handlers.insertion(drv, &umsg->insertion, &result);
+				ret = drv->handlers.insertion(drv, &umsg->insertion, &event);
 				if (ret == 0) {
-					fprintf(stderr, "usbdrv: %s created device: %s\n", drv->name, result.devpath);
-					memcpy(msg.o.raw, &result, sizeof(usb_result_insertion_t));
+					memcpy(msg.o.raw, &event, sizeof(usb_event_insertion_t));
 					msg.o.err = 0;
 				}
 				break;
