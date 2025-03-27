@@ -89,4 +89,7 @@ int usb_isRoothub(usb_dev_t *dev);
 void usb_devSignal(void);
 
 
+int usb_devFilterMatch(usb_device_desc_t *dev, usb_interface_desc_t *iface, const usb_device_id_t *filter);
+
+
 #endif /* _USB_DEV_H_ */
