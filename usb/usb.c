@@ -211,6 +211,7 @@ static int usb_handleConnect(msg_t *msg, usb_connect_t *c)
 	drv->extrn.id = msg->pid;
 	drv->extrn.port = c->port;
 	drv->driver.nfilters = c->nfilters;
+	memcpy(drv->driver.name, c->name, sizeof(char) * USB_DRVNAME_MAX);
 	memcpy((void *)drv->driver.filters, msg->i.data, msg->i.size);
 	usb_drvAdd(drv);
 

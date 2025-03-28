@@ -57,6 +57,7 @@ typedef struct {
 typedef struct {
 	unsigned port;
 	unsigned nfilters;
+	char name[USB_DRVNAME_MAX];
 } usb_connect_t;
 
 

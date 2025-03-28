@@ -110,10 +110,12 @@ static void usb_thread(void *arg)
 }
 
 
-static int usb_connect(const usb_device_id_t *filters, unsigned int nfilters)
+static int usb_connect(usb_driver_t *drv)
 {
 	msg_t msg = { 0 };
 	usb_msg_t *umsg = (usb_msg_t *)&msg.i.raw;
+	const usb_device_id_t *filters = drv->filters;
+	unsigned int nfilters = drv->nfilters;
 
 	msg.type = mtDevCtl;
 	msg.i.size = sizeof(*filters) * nfilters;
@@ -122,6 +124,7 @@ static int usb_connect(const usb_device_id_t *filters, unsigned int nfilters)
 	umsg->type = usb_msg_connect;
 	umsg->connect.port = usbprocdrv_common.drvport;
 	umsg->connect.nfilters = nfilters;
+	strncpy(umsg->connect.name, drv->name, USB_DRVNAME_MAX);
 
 	return msgSend(usbprocdrv_common.srvport, &msg) < 0;
 }
@@ -148,7 +151,7 @@ int usb_driverProcRun(usb_driver_t *drv, void *args)
 		return -1;
 	}
 
-	ret = usb_connect(drv->filters, drv->nfilters);
+	ret = usb_connect(drv);
 	if (ret < 0) {
 		return -1;
 	}
