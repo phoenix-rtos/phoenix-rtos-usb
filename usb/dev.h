@@ -23,11 +23,18 @@
 
 enum usb_speed { usb_full_speed = 0, usb_low_speed, usb_high_speed };
 
+
+typedef struct {
+	unsigned int len;
+	char *str;
+} usb_lenStr_t;
+
+
 typedef struct {
 	usb_interface_desc_t *desc;
 	usb_endpoint_desc_t *eps;
 	void *classDesc;
-	char *str;
+	usb_lenStr_t name;
 
 	struct usb_drvpriv *driver;
 } usb_iface_t;
@@ -39,9 +46,10 @@ typedef struct _usb_dev {
 	enum usb_speed speed;
 	usb_device_desc_t desc;
 	usb_configuration_desc_t *conf;
-	char *manufacturer;
-	char *product;
-	char *serialNumber;
+
+	usb_lenStr_t manufacturer;
+	usb_lenStr_t product;
+	usb_lenStr_t serialNumber;
 	uint16_t langId;
 
 	int address;
