@@ -24,7 +24,7 @@
 #include <posix/idtree.h>
 
 #define USB_DRVNAME_MAX 10
-#define USB_STR_MAX     255
+#define USB_STR_MAX     254 /* per USB 2.0 spec */
 
 #define USBDRV_ANY ((unsigned)-1)
 

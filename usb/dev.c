@@ -131,13 +131,14 @@ void usb_devFree(usb_dev_t *dev)
 {
 	int i;
 
-	free(dev->manufacturer);
-	free(dev->product);
-	free(dev->serialNumber);
+	free(dev->manufacturer.str);
+	free(dev->product.str);
+	free(dev->serialNumber.str);
 	free(dev->conf);
 
-	for (i = 0; i < dev->nifs; i++)
-		free(dev->ifs[i].str);
+	for (i = 0; i < dev->nifs; i++) {
+		free(dev->ifs[i].name.str);
+	}
 
 	usb_drvPipeFree(NULL, dev->ctrlPipe);
 	if (dev->statusTransfer != NULL) {
@@ -351,81 +352,143 @@ static int usb_getConfiguration(usb_dev_t *dev)
 }
 
 
-static int usb_getStringDesc(usb_dev_t *dev, char **buf, int index)
+static int usb_getStringDesc(usb_dev_t *dev, usb_lenStr_t *dest, int index)
 {
 	usb_string_desc_t desc = { 0 };
-	int i;
-	size_t asciisz;
 
 	if (usb_getDescriptor(dev, USB_DESC_STRING, index, (char *)&desc, sizeof(desc)) < 0) {
 		log_error("Fail to get string descriptor\n");
 		return -1;
 	}
-	asciisz = (desc.bLength - 2) / 2;
 
-	/* Convert from unicode to ascii */
-	if ((*buf = calloc(1, asciisz + 1)) == NULL)
+	dest->str = malloc(desc.bLength - 2);
+	if (dest->str == NULL) {
 		return -ENOMEM;
+	}
 
-	for (i = 0; i < asciisz; i++)
-		(*buf)[i] = desc.wData[i * 2];
+	dest->len = desc.bLength - 2;
+	memcpy(dest->str, desc.wData, dest->len);
 
 	return 0;
 }
 
 
-#define USB_STRING_MAX_LEN 255
-
-
-static void usb_fallbackProductString(usb_dev_t *dev)
+/* assumes dest buffer size >= len / 2 + 1 */
+static unsigned int usb_utf16ToAscii(char *dest, const char *src, unsigned int len)
 {
-	char product[USB_STRING_MAX_LEN] = { 0 };
+	unsigned int asciilen = len / 2;
+	int i;
+
+	if (len < 2) {
+		return 0;
+	}
+
+	for (i = 0; i < asciilen; i++) {
+		dest[i] = src[i * 2];
+	}
+
+	dest[asciilen] = 0;
+
+	return asciilen;
+}
+
+
+#define USB_HID_UTF16_STR      u"USB HID"
+#define USB_HUB_ROOT_USTR      u"USB Root Hub"
+#define USB_HUB_SINGLE_TT_USTR u"USB Single TT Hub"
+#define USB_HUB_OTHER_USTR     u"USB Hub"
+#define USB_MASS_STORAGE_USTR  u"USB Mass Storage"
+#define USB_UNKNOWN_DEV_USTR   u"Unknown USB Device"
+
+
+static int usb_fallbackProductString(usb_dev_t *dev)
+{
+	char *product;
+	unsigned int len;
 
 	switch (dev->desc.bDeviceClass) {
 		case USB_CLASS_HID:
-			strcpy(product, "USB HID");
+			product = (char *)USB_HID_UTF16_STR;
+			len = sizeof(USB_HID_UTF16_STR);
 			break;
 		case USB_CLASS_HUB:
 			switch (dev->desc.bDeviceProtocol) {
 				case USB_HUB_PROTO_ROOT:
-					strcpy(product, "USB Root Hub");
+					product = (char *)USB_HUB_ROOT_USTR;
+					len = sizeof(USB_HUB_ROOT_USTR);
 					break;
 				case USB_HUB_PROTO_SINGLE_TT:
-					strcpy(product, "USB Single TT Hub");
+					product = (char *)USB_HUB_SINGLE_TT_USTR;
+					len = sizeof(USB_HUB_SINGLE_TT_USTR);
 					break;
 				default:
-					strcpy(product, "USB Hub");
+					product = (char *)USB_HUB_OTHER_USTR;
+					len = sizeof(USB_HUB_OTHER_USTR);
 					break;
 			}
 			break;
 		case USB_CLASS_MASS_STORAGE:
-			strcpy(product, "USB Mass Storage");
+			product = (char *)USB_MASS_STORAGE_USTR;
+			len = sizeof(USB_MASS_STORAGE_USTR);
 			break;
 		default:
-			strcpy(product, "Unknown USB Device");
+			product = (char *)USB_UNKNOWN_DEV_USTR;
+			len = sizeof(USB_UNKNOWN_DEV_USTR);
 			break;
 	}
 
-	dev->product = calloc(sizeof(char), strnlen(product, USB_STRING_MAX_LEN) + 1);
-	strcpy(dev->product, product);
+	len -= 2;
+
+	dev->product.str = malloc(len);
+
+	if (dev->product.str == NULL) {
+		return -ENOMEM;
+	}
+
+	memcpy(dev->product.str, product, len);
+	dev->product.len = len;
+
+	return 0;
 }
 
 
-static void usb_fallbackManufacturerString(usb_dev_t *dev)
-{
-	char manufacturer[] = "Generic";
+#define USB_MANUFACTURER_USTR u"Generic"
 
-	dev->manufacturer = calloc(sizeof(char), strnlen(manufacturer, USB_STRING_MAX_LEN) + 1);
-	strcpy(dev->manufacturer, manufacturer);
+
+static int usb_fallbackManufacturerString(usb_dev_t *dev)
+{
+	const char *manufacturer = (char *)USB_MANUFACTURER_USTR;
+	int len = sizeof(USB_MANUFACTURER_USTR) - 2;
+
+	dev->manufacturer.str = malloc(len);
+	if (dev->manufacturer.str == NULL) {
+		return -ENOMEM;
+	}
+
+	memcpy(dev->manufacturer.str, manufacturer, len);
+	dev->manufacturer.len = len;
+
+	return 0;
 }
 
 
-static void usb_fallbackSerialNumberString(usb_dev_t *dev)
-{
-	char serialNumber[] = "Unknown";
+#define USB_SERIAL_NUMBER_USTR u"Unknown"
 
-	dev->serialNumber = calloc(sizeof(char), strnlen(serialNumber, USB_STRING_MAX_LEN) + 1);
-	strcpy(dev->serialNumber, serialNumber);
+
+static int usb_fallbackSerialNumberString(usb_dev_t *dev)
+{
+	const char *serialNumber = (char *)USB_SERIAL_NUMBER_USTR;
+	int len = sizeof(USB_SERIAL_NUMBER_USTR) - 2;
+
+	dev->serialNumber.str = malloc(len);
+	if (dev->serialNumber.str == NULL) {
+		return -ENOMEM;
+	}
+
+	memcpy(dev->serialNumber.str, serialNumber, len);
+	dev->serialNumber.len = len;
+
+	return 0;
 }
 
 
@@ -475,7 +538,7 @@ static int usb_getAllStringDescs(usb_dev_t *dev)
 	for (i = 0; i < dev->nifs; i++) {
 		if (dev->ifs[i].desc->iInterface == 0)
 			continue;
-		if (usb_getStringDesc(dev, &dev->ifs[i].str, dev->ifs[i].desc->iInterface) != 0)
+		if (usb_getStringDesc(dev, &dev->ifs[i].name, dev->ifs[i].desc->iInterface) != 0)
 			return -ENOMEM;
 	}
 
@@ -487,6 +550,8 @@ static int usb_getAllStringDescs(usb_dev_t *dev)
 
 int usb_devEnumerate(usb_dev_t *dev)
 {
+	char manufacturerAscii[USB_STR_MAX / 2 + 1];
+	char productAscii[USB_STR_MAX / 2 + 1];
 	int addr, iface;
 	usb_event_insertion_t insertion = { 0 };
 
@@ -528,8 +593,11 @@ int usb_devEnumerate(usb_dev_t *dev)
 	if (!usb_isRoothub(dev))
 		usb_devSetChild(dev->hub, dev->port, dev);
 
+	usb_utf16ToAscii(manufacturerAscii, dev->manufacturer.str, dev->manufacturer.len);
+	usb_utf16ToAscii(productAscii, dev->product.str, dev->product.len);
+
 	log_info("New device addr: %d locationID: %08x %s, %s\n", dev->address, dev->locationID,
-			dev->manufacturer, dev->product);
+			manufacturerAscii, productAscii);
 
 	if (dev->desc.bDeviceClass == USB_CLASS_HUB) {
 		if (hub_conf(dev) != 0)
