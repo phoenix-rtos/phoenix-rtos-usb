@@ -136,9 +136,9 @@ void usb_devFree(usb_dev_t *dev)
 {
 	int i;
 
-	free(dev->manufacturer);
-	free(dev->product);
-	free(dev->serialNumber);
+	free(dev->manufacturer.str);
+	free(dev->product.str);
+	free(dev->serialNumber.str);
 	free(dev->conf);
 
 	for (i = 0; i < dev->nifs; i++)
@@ -356,63 +356,94 @@ static int usb_getConfiguration(usb_dev_t *dev)
 }
 
 
-static int usb_getStringDesc(usb_dev_t *dev, char **buf, int index)
+static int usb_getStringDesc(usb_dev_t *dev, usb_lenStr_t *dest, int index)
 {
 	usb_string_desc_t desc = { 0 };
-	int i;
-	size_t asciisz;
 
 	if (usb_getDescriptor(dev, USB_DESC_STRING, index, (char *)&desc, sizeof(desc)) < 0) {
 		log_error("Fail to get string descriptor\n");
 		return -1;
 	}
-	asciisz = (desc.bLength - 2) / 2;
 
-	/* Convert from unicode to ascii */
-	if ((*buf = calloc(1, asciisz + 1)) == NULL)
+	dest->len = desc.bLength;
+	dest->str = calloc(sizeof(char), dest->len);
+	if (dest->str == NULL) {
 		return -ENOMEM;
+	}
 
-	for (i = 0; i < asciisz; i++)
-		(*buf)[i] = desc.wData[i * 2];
+	memcpy(dest->str, desc.wData, desc.bLength);
 
 	return 0;
 }
 
 
-#define USB_STRING_MAX_LEN 255
+/* assumes dest buffer size >= len / 2 + 1 */
+static unsigned int usb_utf16ToAscii(char *dest, const char *src, unsigned int len)
+{
+	unsigned int asciilen = len / 2;
+	int i;
+
+	if (len < 2) {
+		return 0;
+	}
+
+	for (i = 0; i < asciilen; i++) {
+		dest[i] = src[i * 2];
+	}
+
+	dest[asciilen] = 0;
+
+	return asciilen;
+}
+
+
+static int usb_asciiToUtf16(char *dest, const char *src)
+{
+	unsigned int n = min(strlen(src), USB_STR_MAX);
+	int i;
+
+	for (i = 0; i < n; i++) {
+		dest[i * 2] = src[i];
+		dest[i * 2 + 1] = 0;
+	}
+
+	return 2 * n;
+}
 
 
 static void usb_fallbackProductString(usb_dev_t *dev)
 {
-	char product[USB_STRING_MAX_LEN] = { 0 };
+	char product[USB_STR_MAX] = { 0 };
+	unsigned int len;
 
 	switch (dev->desc.bDeviceClass) {
 		case USB_CLASS_HID:
-			strcpy(product, "USB HID");
+			len = usb_asciiToUtf16(product, "USB HID");
 			break;
 		case USB_CLASS_HUB:
 			switch (dev->desc.bDeviceProtocol) {
 				case USB_HUB_PROTO_ROOT:
-					strcpy(product, "USB Root Hub");
+					len = usb_asciiToUtf16(product, "USB Root Hub");
 					break;
 				case USB_HUB_PROTO_SINGLE_TT:
-					strcpy(product, "USB Single TT Hub");
+					len = usb_asciiToUtf16(product, "USB Single TT Hub");
 					break;
 				default:
-					strcpy(product, "USB Hub");
+					len = usb_asciiToUtf16(product, "USB Hub");
 					break;
 			}
 			break;
 		case USB_CLASS_MASS_STORAGE:
-			strcpy(product, "USB Mass Storage");
+			len = usb_asciiToUtf16(product, "USB Mass Storage");
 			break;
 		default:
-			strcpy(product, "Unknown USB Device");
+			len = usb_asciiToUtf16(product, "Unknown USB Device");
 			break;
 	}
 
-	dev->product = calloc(sizeof(char), strnlen(product, USB_STRING_MAX_LEN) + 1);
-	strcpy(dev->product, product);
+	dev->product.len = len;
+	dev->product.str = calloc(sizeof(char), dev->product.len);
+	memcpy(dev->product.str, product, dev->product.len);
 }
 
 
@@ -420,8 +451,9 @@ static void usb_fallbackManufacturerString(usb_dev_t *dev)
 {
 	char manufacturer[] = "Generic";
 
-	dev->manufacturer = calloc(sizeof(char), strnlen(manufacturer, USB_STRING_MAX_LEN) + 1);
-	strcpy(dev->manufacturer, manufacturer);
+	dev->manufacturer.len = 2 * strnlen(manufacturer, USB_STR_MAX / 2) + 1;
+	dev->manufacturer.str = calloc(sizeof(char), dev->manufacturer.len);
+	usb_asciiToUtf16(dev->manufacturer.str, manufacturer);
 }
 
 
@@ -429,8 +461,9 @@ static void usb_fallbackSerialNumberString(usb_dev_t *dev)
 {
 	char serialNumber[] = "Unknown";
 
-	dev->serialNumber = calloc(sizeof(char), strnlen(serialNumber, USB_STRING_MAX_LEN) + 1);
-	strcpy(dev->serialNumber, serialNumber);
+	dev->serialNumber.len = 2 * strnlen(serialNumber, USB_STR_MAX / 2) + 1;
+	dev->serialNumber.str = calloc(sizeof(char), dev->serialNumber.len);
+	usb_asciiToUtf16(dev->serialNumber.str, serialNumber);
 }
 
 
@@ -480,7 +513,7 @@ static int usb_getAllStringDescs(usb_dev_t *dev)
 	for (i = 0; i < dev->nifs; i++) {
 		if (dev->ifs[i].desc->iInterface == 0)
 			continue;
-		if (usb_getStringDesc(dev, &dev->ifs[i].str, dev->ifs[i].desc->iInterface) != 0)
+		if (usb_getStringDesc(dev, dev->ifs[i].str, dev->ifs[i].desc->iInterface) != 0)
 			return -ENOMEM;
 	}
 
@@ -543,6 +576,8 @@ int usb_devFilterMatch(usb_device_desc_t *dev, usb_interface_desc_t *iface, cons
 
 int usb_devEnumerate(usb_dev_t *dev)
 {
+	char manufacturerAscii[USB_STR_MAX / 2 + 1];
+	char productAscii[USB_STR_MAX / 2 + 1];
 	int addr, iface;
 	usb_event_insertion_t insertion = { 0 };
 
@@ -584,8 +619,11 @@ int usb_devEnumerate(usb_dev_t *dev)
 	if (!usb_isRoothub(dev))
 		usb_devSetChild(dev->hub, dev->port, dev);
 
+	usb_utf16ToAscii(manufacturerAscii, dev->manufacturer.str, dev->manufacturer.len);
+	usb_utf16ToAscii(productAscii, dev->product.str, dev->product.len);
+
 	log_msg("New device addr: %d locationID: %08x %s, %s\n", dev->address, dev->locationID,
-			dev->manufacturer, dev->product);
+			manufacturerAscii, productAscii);
 
 	if (dev->desc.bDeviceClass == USB_CLASS_HUB) {
 		return hub_conf(dev);
