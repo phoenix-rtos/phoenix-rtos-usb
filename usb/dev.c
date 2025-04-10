@@ -596,8 +596,9 @@ int usb_devEnumerate(usb_dev_t *dev)
 	usb_utf16ToAscii(manufacturerAscii, dev->manufacturer.str, dev->manufacturer.len);
 	usb_utf16ToAscii(productAscii, dev->product.str, dev->product.len);
 
-	log_info("New device addr: %d locationID: %08x %s, %s\n", dev->address, dev->locationID,
-			manufacturerAscii, productAscii);
+	log_info("New device: %04x:%04x %s, %s (%d, %08x)\n",
+			dev->desc.idVendor, dev->desc.idProduct, manufacturerAscii, productAscii,
+			dev->address, dev->locationID);
 
 	if (dev->desc.bDeviceClass == USB_CLASS_HUB) {
 		if (hub_conf(dev) != 0)
