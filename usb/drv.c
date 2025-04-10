@@ -26,7 +26,10 @@
 
 #include "drv.h"
 #include "hcd.h"
+#include "log.h"
 
+#undef USB_LOG_TAG
+#define USB_LOG_TAG "usbdrv"
 
 struct {
 	handle_t lock;
@@ -107,12 +110,12 @@ static usb_pipe_t *_usb_drvPipeOpen(usb_drvpriv_t *drv, hcd_t *hcd, int location
 	int i;
 
 	if ((dev = usb_devFind(hcd->roothub, locationID)) == NULL) {
-		USB_LOG("usb: Fail to find device\n");
+		log_error("Fail to find device\n");
 		return NULL;
 	}
 
 	if (dev->nifs < ifaceID) {
-		USB_LOG("usb: Fail to find iface\n");
+		log_error("Fail to find iface\n");
 		return NULL;
 	}
 
@@ -396,7 +399,7 @@ int usb_drvBind(usb_dev_t *dev, usb_result_insertion_t *result)
 					}
 					break;
 				default:
-					USB_LOG("usb: unexpected driver type: %d\n", drv->type);
+					log_error("unexpected driver type: %d\n", drv->type);
 					break;
 			}
 
@@ -591,7 +594,7 @@ static int _usb_handleUrb(msg_t *msg, unsigned int port, unsigned long rid)
 
 	drv = _usb_drvFind(msg->pid);
 	if (drv == NULL) {
-		USB_LOG("usb: driver pid %d does not exist!\n", msg->pid);
+		log_error("driver pid %d does not exist!\n", msg->pid);
 		return -EINVAL;
 	}
 
@@ -606,7 +609,7 @@ static int _usb_handleUrb(msg_t *msg, unsigned int port, unsigned long rid)
 		t->extrn.osize = msg->o.size;
 	}
 	else {
-		USB_LOG("usb: urb handler/recipient type mismatch\n");
+		log_error("urb handler/recipient type mismatch\n");
 		return -EINVAL;
 	}
 	t->pipeid = urb->pipe;
@@ -672,13 +675,13 @@ int usb_drvInit(void)
 
 	ret = mutexCreate(&usbdrv_common.lock);
 	if (ret != 0) {
-		USB_LOG("usbdrv: Can't create mutex!\n");
+		log_error("Can't create mutex!\n");
 		return -ENOMEM;
 	}
 
 	ret = condCreate(&usbdrv_common.drvAddedCond);
 	if (ret != 0) {
-		USB_LOG("usbdrv: Can't create cond!\n");
+		log_error("Can't create cond!\n");
 		resourceDestroy(usbdrv_common.lock);
 		return -ENOMEM;
 	}
@@ -706,7 +709,7 @@ static int usblibdrv_handleUrb(usb_driver_t *drv, usb_urb_t *urb, void *data)
 		t->intrn.drv = drv;
 	}
 	else {
-		USB_LOG("usb: urb handler/recipient type mismatch\n");
+		log_error("urb handler/recipient type mismatch\n");
 		usb_transferFree(t);
 		return -EINVAL;
 	}
@@ -748,14 +751,14 @@ static int usblibdrv_handleUrb(usb_driver_t *drv, usb_urb_t *urb, void *data)
 
 static int usblibdrv_urbSubmitSync(usb_driver_t *drv, usb_urb_t *urb, void *data)
 {
-	USB_TRACE("")
+	log_trace("");
 	return usblibdrv_handleUrb(drv, urb, data);
 }
 
 
 static int usblibdrv_urbTransferAsync(usb_driver_t *drv, unsigned pipe, unsigned urbid, size_t size, usb_setup_packet_t *setup)
 {
-	USB_TRACE("")
+	log_trace("");
 	usb_urbcmd_t urbcmd = { 0 };
 	usb_drvpriv_t *drvpriv = (usb_drvpriv_t *)drv->hostPriv;
 	int ret;
@@ -779,14 +782,14 @@ static int usblibdrv_urbTransferAsync(usb_driver_t *drv, unsigned pipe, unsigned
 
 static void usblibdrv_urbSyncCompleted(usb_transfer_t *t)
 {
-	USB_TRACE("")
+	log_trace("");
 	condSignal(*t->intrn.finishedCond);
 }
 
 
 static void usblibdrv_urbAsyncCompleted(usb_transfer_t *t)
 {
-	USB_TRACE("")
+	log_trace("");
 	usb_completion_t c = { 0 };
 	usb_driver_t *drv = t->intrn.drv;
 	void *data = NULL;
@@ -810,7 +813,7 @@ static void usblibdrv_urbAsyncCompleted(usb_transfer_t *t)
 
 static int usblibdrv_urbAlloc(usb_driver_t *drv, unsigned pipe, void *data, usb_dir_t dir, size_t size, int type)
 {
-	USB_TRACE("")
+	log_trace("");
 	usb_urb_t urb = { 0 };
 	urb.pipe = pipe;
 	urb.type = type;
@@ -824,7 +827,7 @@ static int usblibdrv_urbAlloc(usb_driver_t *drv, unsigned pipe, void *data, usb_
 
 static int usblibdrv_urbFree(usb_driver_t *drv, unsigned pipe, unsigned urb)
 {
-	USB_TRACE("")
+	log_trace("");
 	usb_urbcmd_t urbcmd = { 0 };
 	usb_drvpriv_t *drvpriv = (usb_drvpriv_t *)drv->hostPriv;
 	int ret;
@@ -878,6 +881,6 @@ void usb_libDrvDestroy(usb_driver_t *drv)
 	int ret;
 	ret = drv->ops.destroy(drv);
 	if (ret < 0) {
-		USB_LOG("usb: driver destroy failed: %d\n", ret);
+		log_error("driver destroy failed: %d\n", ret);
 	}
 }
