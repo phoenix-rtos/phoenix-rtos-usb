@@ -27,6 +27,7 @@
 #include "drv.h"
 #include "hcd.h"
 #include "hub.h"
+#include "log.h"
 
 #define USBDEV_BUF_SIZE 0x200
 
@@ -244,7 +245,7 @@ static int usb_getConfiguration(usb_dev_t *dev)
 		uint8_t len = ((struct usb_desc_header *)ptr)->bLength;
 
 		if ((len < sizeof(struct usb_desc_header)) || (len > size)) {
-			USB_LOG("usb: Invalid descriptor size: %u\n", len);
+			log_error("Invalid descriptor size: %u\n", len);
 			break;
 		}
 
@@ -268,7 +269,7 @@ static int usb_getConfiguration(usb_dev_t *dev)
 					}
 				}
 				else {
-					USB_LOG("usb: Interface descriptor with invalid size\n");
+					log_error("Interface descriptor with invalid size\n");
 					ret = -1;
 				}
 				break;
@@ -296,7 +297,7 @@ static int usb_getConfiguration(usb_dev_t *dev)
 					}
 				}
 				else {
-					USB_LOG("usb: Endpoint descriptor with invalid size\n");
+					log_error("Endpoint descriptor with invalid size\n");
 					ret = -1;
 				}
 				break;
@@ -309,7 +310,7 @@ static int usb_getConfiguration(usb_dev_t *dev)
 					dev->desc.bDeviceProtocol = ((usb_interface_association_desc_t *)ptr)->bFunctionProtocol;
 				}
 				else {
-					USB_LOG("usb: Interface assoctiation descriptor with invalid size\n");
+					log_error("Interface assoctiation descriptor with invalid size\n");
 					ret = -1;
 				}
 				break;
@@ -319,7 +320,7 @@ static int usb_getConfiguration(usb_dev_t *dev)
 				break;
 
 			default:
-				USB_LOG("usb: Ignoring unkonown descriptor type: 0x%02x\n", ((struct usb_desc_header *)ptr)->bDescriptorType);
+				log_error("Ignoring unkonown descriptor type: 0x%02x\n", ((struct usb_desc_header *)ptr)->bDescriptorType);
 				break;
 		}
 
@@ -336,7 +337,7 @@ static int usb_getConfiguration(usb_dev_t *dev)
 	}
 
 	if (ret != 0) {
-		USB_LOG("usb: Fail to parse interface descriptors\n");
+		log_error("Fail to parse interface descriptors\n");
 		free(dev->ifs);
 		dev->ifs = NULL;
 		dev->nifs = 0;
@@ -357,7 +358,7 @@ static int usb_getStringDesc(usb_dev_t *dev, char **buf, int index)
 	size_t asciisz;
 
 	if (usb_getDescriptor(dev, USB_DESC_STRING, index, (char *)&desc, sizeof(desc)) < 0) {
-		USB_LOG("usb: Fail to get string descriptor\n");
+		log_error("Fail to get string descriptor\n");
 		return -1;
 	}
 	asciisz = (desc.bLength - 2) / 2;
@@ -490,12 +491,12 @@ int usb_devEnumerate(usb_dev_t *dev)
 	usb_event_insertion_t insertion = { 0 };
 
 	if (usb_genLocationID(dev) < 0) {
-		USB_LOG("usb: Fail to generate location ID\n");
+		log_error("Fail to generate location ID\n");
 		return -1;
 	}
 
 	if (usb_getDevDesc(dev) < 0) {
-		USB_LOG("usb: Fail to get device descriptor\n");
+		log_error("Fail to get device descriptor\n");
 		return -1;
 	}
 
@@ -503,22 +504,22 @@ int usb_devEnumerate(usb_dev_t *dev)
 	dev->ctrlPipe->maxPacketLen = dev->desc.bMaxPacketSize0;
 
 	if ((addr = hcd_addrAlloc(dev->hcd)) < 0) {
-		USB_LOG("usb: Fail to add device to hcd\n");
+		log_error("Fail to add device to hcd\n");
 		return -1;
 	}
 
 	if (usb_setAddress(dev, addr) < 0) {
-		USB_LOG("usb: Fail to set device address\n");
+		log_error("Fail to set device address\n");
 		return -1;
 	}
 
 	if (usb_getDevDesc(dev) < 0) {
-		USB_LOG("usb: Fail to get device descriptor\n");
+		log_error("Fail to get device descriptor\n");
 		return -1;
 	}
 
 	if (usb_getConfiguration(dev) < 0) {
-		USB_LOG("usb: Fail to get configuration descriptor\n");
+		log_error("Fail to get configuration descriptor\n");
 		return -1;
 	}
 
@@ -527,7 +528,7 @@ int usb_devEnumerate(usb_dev_t *dev)
 	if (!usb_isRoothub(dev))
 		usb_devSetChild(dev->hub, dev->port, dev);
 
-	USB_LOG("usb: New device addr: %d locationID: %08x %s, %s\n", dev->address, dev->locationID,
+	log_info("New device addr: %d locationID: %08x %s, %s\n", dev->address, dev->locationID,
 			dev->manufacturer, dev->product);
 
 	if (dev->desc.bDeviceClass == USB_CLASS_HUB) {
@@ -535,12 +536,12 @@ int usb_devEnumerate(usb_dev_t *dev)
 			return -1;
 	}
 	else if (usb_drvBind(dev, &insertion, &iface) != 0) {
-		USB_LOG("usb: Fail to match drivers for device\n");
+		log_msg("Fail to match drivers for device\n");
 		/* TODO: make device orphaned */
 	}
 
 	if (insertion.deviceCreated) {
-		fprintf(stderr, "usb: Driver bound to device with addr %d: %s\n", dev->address, insertion.devPath);
+		log_info("Driver bound to device with addr %d: %s\n", dev->address, insertion.devPath);
 	}
 
 	return 0;
@@ -596,7 +597,7 @@ usb_dev_t *usb_devFind(usb_dev_t *hub, int locationID)
 void usb_devDisconnected(usb_dev_t *dev, bool silent)
 {
 	if (!silent) {
-		printf("usb: Device disconnected addr %d locationID: %08x\n", dev->address, dev->locationID);
+		log_info("Device disconnected addr %d locationID: %08x\n", dev->address, dev->locationID);
 	}
 	usb_devSetChild(dev->hub, dev->port, NULL);
 	usb_devUnbind(dev);
@@ -619,20 +620,20 @@ int usb_isRoothub(usb_dev_t *dev)
 int usb_devInit(void)
 {
 	if (mutexCreate(&usbdev_common.lock) != 0) {
-		USB_LOG("usbdev: Can't create mutex!\n");
+		log_error("Can't create mutex!\n");
 		return -ENOMEM;
 	}
 
 	if (condCreate(&usbdev_common.cond) != 0) {
 		resourceDestroy(usbdev_common.lock);
-		USB_LOG("usbdev: Can't create cond!\n");
+		log_error("Can't create cond!\n");
 		return -ENOMEM;
 	}
 
 	if ((usbdev_common.setupBuf = usb_alloc(USBDEV_BUF_SIZE)) == NULL) {
 		resourceDestroy(usbdev_common.lock);
 		resourceDestroy(usbdev_common.cond);
-		USB_LOG("usbdev: Fail to allocate buffer!\n");
+		log_error("Fail to allocate buffer!\n");
 		return -ENOMEM;
 	}
 

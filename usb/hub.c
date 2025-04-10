@@ -31,12 +31,17 @@
 #include "drv.h"
 #include "hcd.h"
 #include "dev.h"
+#include "log.h"
 
 #define HUB_ENUM_RETRIES     3
 #define HUB_DEBOUNCE_STABLE  100000
 #define HUB_DEBOUNCE_PERIOD  25000
 #define HUB_DEBOUNCE_TIMEOUT 1500000
 #define HUB_TT_POLL_DELAY_MS 1000000
+
+
+#undef USB_LOG_TAG
+#define USB_LOG_TAG "usbhub"
 
 
 typedef struct _hub_event {
@@ -143,20 +148,20 @@ static int hub_interruptInit(usb_dev_t *hub)
 	usb_transfer_t *t;
 
 	if ((t = calloc(1, sizeof(usb_transfer_t))) == NULL) {
-		USB_LOG("hub: Out of memory!\n");
+		log_error("Out of memory!\n");
 		return -ENOMEM;
 	}
 
 	if ((t->buffer = usb_alloc(sizeof(uint32_t))) == NULL) {
 		free(t);
-		USB_LOG("hub: Out of memory!\n");
+		log_error("Out of memory!\n");
 		return -ENOMEM;
 	}
 
 	if ((hub->irqPipe = usb_pipeOpen(hub, 0, usb_dir_in, usb_transfer_interrupt)) == NULL) {
 		usb_free(t->buffer, sizeof(uint32_t));
 		free(t);
-		USB_LOG("hub: Fail to open interrupt pipe!\n");
+		log_error("Fail to open interrupt pipe!\n");
 		return -ENOMEM;
 	}
 
@@ -290,7 +295,7 @@ static void hub_devConnected(usb_dev_t *hub, int port)
 	int retries = HUB_ENUM_RETRIES;
 
 	if ((dev = usb_devAlloc()) == NULL) {
-		USB_LOG("hub: Not enough memory to allocate a new device!\n");
+		log_error("Not enough memory to allocate a new device!\n");
 		return;
 	}
 
@@ -300,7 +305,7 @@ static void hub_devConnected(usb_dev_t *hub, int port)
 
 	do {
 		if ((ret = hub_portReset(hub, port, &status)) < 0) {
-			USB_LOG("hub: fail to reset port %d\n", port);
+			log_error("fail to reset port %d\n", port);
 			break;
 		}
 
@@ -462,12 +467,12 @@ int hub_conf(usb_dev_t *hub)
 	int i;
 
 	if (hub_setConf(hub, 1) < 0) {
-		USB_LOG("hub: Fail to set configuration!\n");
+		log_error("Fail to set configuration!\n");
 		return -EINVAL;
 	}
 
 	if (hub_getDesc(hub, buf, sizeof(buf)) < 0) {
-		USB_LOG("hub: Fail to get descriptor\n");
+		log_error("Fail to get descriptor\n");
 		return -EINVAL;
 	}
 
@@ -475,13 +480,13 @@ int hub_conf(usb_dev_t *hub)
 	desc = (usb_hub_desc_t *)buf;
 	hub->nports = min(USB_HUB_MAX_PORTS, desc->bNbrPorts);
 	if ((hub->devs = calloc(hub->nports, sizeof(usb_dev_t *))) == NULL) {
-		USB_LOG("hub: Out of memory!\n");
+		log_error("Out of memory!\n");
 		return -ENOMEM;
 	}
 
 	for (i = 0; i < hub->nports; i++) {
 		if (hub_setPortPower(hub, i + 1) < 0) {
-			USB_LOG("hub: Fail to set port %d power!\n", i + 1);
+			log_error("Fail to set port %d power!\n", i + 1);
 			free(hub->devs);
 			return -EINVAL;
 		}

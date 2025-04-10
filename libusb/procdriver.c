@@ -20,6 +20,8 @@
 #include <usbdriver.h>
 #include <usbprocdriver.h>
 
+#include "log.h"
+
 
 #ifndef USB_N_UMSG_THREADS
 #define USB_N_UMSG_THREADS 2
@@ -28,6 +30,10 @@
 #ifndef USB_UMSG_PRIO
 #define USB_UMSG_PRIO 3
 #endif
+
+
+#undef LIBUSB_LOG_TAG
+#define LIBUSB_LOG_TAG "libusb(procdriver)"
 
 
 static usb_pipeOps_t usbprocdrv_pipeOps;
@@ -73,7 +79,7 @@ static void usb_thread(void *arg)
 		do {
 			ret = msgRecv(usbprocdrv_common.drvport, &msg, &rid);
 			if (ret < 0 && ret != -EINTR) {
-				fprintf(stderr, "usbdrv: error when receiving event from host\n");
+				log_error("error when receiving event from host\n");
 				continue;
 			}
 		} while (ret == -EINTR);
@@ -92,13 +98,13 @@ static void usb_thread(void *arg)
 				drv->handlers.completion(drv, &umsg->completion, msg.i.data, msg.i.size);
 				break;
 			default:
-				fprintf(stderr, "usbdrv: unknown msg type\n");
+				log_error("unknown msg type\n");
 				break;
 		}
 
 		ret = msgRespond(usbprocdrv_common.drvport, &msg, rid);
 		if (ret < 0) {
-			fprintf(stderr, "usbdrv: error when replying to host\n");
+			log_error("error when replying to host\n");
 		}
 	}
 }
@@ -150,7 +156,7 @@ int usb_driverProcRun(usb_driver_t *drv, void *args)
 	for (i = 0; i < USB_N_UMSG_THREADS - 1; i++) {
 		ret = beginthread(usb_thread, USB_UMSG_PRIO, usbprocdrv_common.ustack[i], sizeof(usbprocdrv_common.ustack[i]), drv);
 		if (ret < 0) {
-			fprintf(stderr, "usbdrv: fail to beginthread ret: %d\n", ret);
+			log_error("fail to beginthread ret: %d\n", ret);
 			return -1;
 		}
 	}
