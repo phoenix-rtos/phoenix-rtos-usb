@@ -360,13 +360,15 @@ int usb_drvUnbind(usb_drvpriv_t *drv, usb_dev_t *dev, int iface)
 }
 
 
-int usb_drvBind(usb_dev_t *dev, usb_event_insertion_t *event, int *iface)
+int usb_drvBind(usb_dev_t *dev, usb_drvOnBindCb_t onBindCb)
 {
 	usb_drvpriv_t *drv;
 
 	msg_t msg = { 0 };
 	usb_msg_t *umsg = (usb_msg_t *)msg.i.raw;
 	int i, err, ndrvs = 0;
+
+	usb_event_insertion_t event = { 0 };
 
 	msg.type = mtDevCtl;
 	umsg->type = usb_msg_insertion;
@@ -383,11 +385,10 @@ int usb_drvBind(usb_dev_t *dev, usb_event_insertion_t *event, int *iface)
 		if (drv != NULL) {
 			dev->ifs[i].driver = drv;
 			umsg->insertion.interface = i;
-			*iface = i;
 
 			switch (drv->type) {
 				case usb_drvType_intrn:
-					err = drv->driver.handlers.insertion(&drv->driver, &umsg->insertion, event);
+					err = drv->driver.handlers.insertion(&drv->driver, &umsg->insertion, &event);
 					break;
 				case usb_drvType_extrn:
 					err = msgSend(drv->extrn.port, &msg);
@@ -396,7 +397,7 @@ int usb_drvBind(usb_dev_t *dev, usb_event_insertion_t *event, int *iface)
 					}
 
 					if (err == 0) {
-						memcpy(event, msg.o.raw, sizeof(usb_event_insertion_t));
+						memcpy(&event, msg.o.raw, sizeof(usb_event_insertion_t));
 					}
 					break;
 				default:
@@ -406,9 +407,13 @@ int usb_drvBind(usb_dev_t *dev, usb_event_insertion_t *event, int *iface)
 			}
 
 			if (err == 0) {
+				if (onBindCb != NULL) {
+					onBindCb(dev, &event, i);
+				}
 				ndrvs++;
 			}
 		}
+
 		/* TODO: Make a device orphaned */
 	}
 
