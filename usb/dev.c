@@ -18,9 +18,12 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <limits.h>
+#include <unistd.h>
 #include <sys/threads.h>
 #include <sys/minmax.h>
 #include <sys/list.h>
+#include <sys/stat.h>
 #include <posix/utils.h>
 
 #include <usb.h>
@@ -594,6 +597,36 @@ static int usb_devCmp(rbnode_t *node1, rbnode_t *node2)
 }
 
 
+#define USB_DEV_SYMLINK_FORMAT "/dev/usb-%04x-%04x-if%02d"
+
+
+static void usb_devSymlinksCreate(usb_dev_t *dev)
+{
+	char linkpath[64] = { 0 };
+	int ret;
+
+	/* TODO: handle per iface symlink */
+	sprintf(linkpath, USB_DEV_SYMLINK_FORMAT, dev->desc.idVendor, dev->desc.idProduct, 0);
+
+	unlink(linkpath);
+	ret = symlink(dev->devPath, linkpath);
+
+	if (ret < 0) {
+		log_error("%s -> %s symlink error: %d", linkpath, dev->devPath, errno);
+	}
+}
+
+
+static void usb_devSymlinksDestroy(usb_dev_t *dev)
+{
+	char linkpath[64] = { 0 };
+
+	/* TODO: handle per iface symlink */
+	sprintf(linkpath, USB_DEV_SYMLINK_FORMAT, dev->desc.idVendor, dev->desc.idProduct, 0);
+	unlink(linkpath);
+}
+
+
 int usb_devEnumerate(usb_dev_t *dev)
 {
 	char manufacturerAscii[USB_STR_MAX / 2 + 1];
@@ -662,6 +695,8 @@ int usb_devEnumerate(usb_dev_t *dev)
 		dev->oid = insertion.dev;
 		strncpy(dev->devPath, insertion.devPath, sizeof(dev->devPath));
 		lib_rbInsert(&usbdev_common.devtree, &dev->node);
+
+		usb_devSymlinksCreate(dev);
 	}
 
 	return 0;
@@ -679,6 +714,7 @@ static void usb_devUnbind(usb_dev_t *dev)
 	}
 
 	lib_rbRemove(&usbdev_common.devtree, &dev->node);
+	usb_devSymlinksDestroy(dev);
 
 	for (i = 0; i < dev->nifs; i++) {
 		if (dev->ifs[i].driver != NULL) {
@@ -733,7 +769,7 @@ int usb_devFindDescFromOid(oid_t oid, usb_devinfo_desc_t *desc)
 
 	fdev = lib_treeof(usb_dev_t, node, lib_rbFind(&usbdev_common.devtree, &dev.node));
 	if (fdev == NULL) {
-		log_msg("device not found with oid.port=%d oid.id=%d\n", oid.port, oid.id);
+		log_msg("device not found with oid.id=%d oid.port=%d\n", oid.id, oid.port);
 		return -EINVAL;
 	}
 
