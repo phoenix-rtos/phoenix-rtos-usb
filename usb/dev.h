@@ -64,7 +64,9 @@ typedef struct _usb_dev {
 	int port;
 
 	/* dev oid created by the dev's driver */
+	/* TODO: extend to oids table, one oid per iface */
 	oid_t oid;
+	char devPath[32];
 
 	/* Hub fields */
 	struct _usb_dev **devs;

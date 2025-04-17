@@ -149,6 +149,7 @@ typedef struct {
 typedef struct {
 	bool deviceCreated;
 	oid_t dev;
+	char devPath[32];
 } usb_event_insertion_t;
 
 
