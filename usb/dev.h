@@ -42,6 +42,7 @@ typedef struct {
 
 typedef struct _usb_dev {
 	struct _usb_dev *next, *prev;
+	rbnode_t node;
 
 	enum usb_speed speed;
 	usb_device_desc_t desc;
@@ -61,6 +62,9 @@ typedef struct _usb_dev {
 	struct hcd *hcd;
 	struct _usb_dev *hub;
 	int port;
+
+	/* dev oid created by the dev's driver */
+	oid_t oid;
 
 	/* Hub fields */
 	struct _usb_dev **devs;
@@ -98,6 +102,9 @@ void usb_devSignal(void);
 
 
 int usb_devFilterMatch(usb_device_desc_t *dev, usb_interface_desc_t *iface, const usb_device_id_t *filter);
+
+
+int usb_devFindDescFromOid(oid_t oid, usb_devinfo_desc_t *desc);
 
 
 #endif /* _USB_DEV_H_ */

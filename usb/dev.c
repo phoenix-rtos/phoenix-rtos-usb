@@ -41,6 +41,7 @@ struct {
 	handle_t cond;
 	char *ctrlBuf;
 	char *setupBuf;
+	rbtree_t devtree;
 } usbdev_common;
 
 
@@ -574,6 +575,25 @@ int usb_devFilterMatch(usb_device_desc_t *dev, usb_interface_desc_t *iface, cons
 }
 
 
+static int usb_devCmp(rbnode_t *node1, rbnode_t *node2)
+{
+	usb_dev_t *dev1 = lib_treeof(usb_dev_t, node, node1);
+	usb_dev_t *dev2 = lib_treeof(usb_dev_t, node, node2);
+
+	if (dev1->oid.id > dev2->oid.id)
+		return 1;
+	if (dev1->oid.id < dev2->oid.id)
+		return -1;
+
+	if (dev1->oid.port > dev2->oid.port)
+		return 1;
+	if (dev1->oid.port < dev2->oid.port)
+		return -1;
+
+	return 0;
+}
+
+
 int usb_devEnumerate(usb_dev_t *dev)
 {
 	char manufacturerAscii[USB_STR_MAX / 2 + 1];
@@ -641,6 +661,7 @@ int usb_devEnumerate(usb_dev_t *dev)
 
 		dev->oid = insertion.dev;
 		strncpy(dev->devPath, insertion.devPath, sizeof(dev->devPath));
+		lib_rbInsert(&usbdev_common.devtree, &dev->node);
 	}
 
 	return 0;
@@ -656,6 +677,8 @@ static void usb_devUnbind(usb_dev_t *dev)
 			usb_devUnbind(dev->devs[i]);
 		}
 	}
+
+	lib_rbRemove(&usbdev_common.devtree, &dev->node);
 
 	for (i = 0; i < dev->nifs; i++) {
 		if (dev->ifs[i].driver != NULL) {
@@ -692,6 +715,42 @@ usb_dev_t *usb_devFind(usb_dev_t *hub, int locationID)
 	mutexUnlock(usbdev_common.lock);
 
 	return dev;
+}
+
+
+int usb_devFindDescFromOid(oid_t oid, usb_devinfo_desc_t *desc)
+{
+	usb_dev_t *fdev;
+	usb_dev_t dev;
+
+	if (desc == NULL) {
+		return -EINVAL;
+	}
+
+	dev.oid = oid;
+
+	mutexLock(usbdev_common.lock);
+
+	fdev = lib_treeof(usb_dev_t, node, lib_rbFind(&usbdev_common.devtree, &dev.node));
+	if (fdev == NULL) {
+		log_msg("device not found with oid.port=%d oid.id=%d\n", oid.port, oid.id);
+		return -EINVAL;
+	}
+
+	memcpy(&desc->desc, &fdev->desc, sizeof(usb_device_desc_t));
+
+	memcpy(desc->product.str, fdev->product.str, fdev->product.len);
+	desc->product.len = fdev->product.len;
+
+	memcpy(desc->manufacturer.str, fdev->manufacturer.str, fdev->manufacturer.len);
+	desc->manufacturer.len = fdev->manufacturer.len;
+
+	memcpy(desc->serialNumber.str, fdev->serialNumber.str, fdev->serialNumber.len);
+	desc->serialNumber.len = fdev->serialNumber.len;
+
+	mutexUnlock(usbdev_common.lock);
+
+	return 0;
 }
 
 
@@ -739,6 +798,8 @@ int usb_devInit(void)
 	}
 
 	usbdev_common.ctrlBuf = usbdev_common.setupBuf + 32;
+
+	lib_rbInit(&usbdev_common.devtree, usb_devCmp, NULL);
 
 	return 0;
 }
