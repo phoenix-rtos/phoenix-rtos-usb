@@ -17,8 +17,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <limits.h>
+#include <unistd.h>
 #include <sys/threads.h>
 #include <sys/list.h>
+#include <sys/rb.h>
 
 #include <usb.h>
 
@@ -31,11 +34,24 @@
 
 #define USBDEV_BUF_SIZE 0x200
 
+
+typedef struct devOid {
+	struct devOid *prev, *next;
+
+	/* iface-specific dev oid created by the dev's driver */
+	oid_t oid;
+
+	usb_dev_t *dev;
+} usb_devOid_t;
+
+
 struct {
 	handle_t lock;
 	handle_t cond;
 	char *ctrlBuf;
 	char *setupBuf;
+
+	usb_devOid_t *devOids;
 } usbdev_common;
 
 
@@ -548,12 +564,66 @@ static int usb_getAllStringDescs(usb_dev_t *dev)
 }
 
 
+#define USB_DEV_SYMLINK_FORMAT "/dev/usb-%04x-%04x-if%02d"
+
+
+static void usb_devSymlinksCreate(usb_dev_t *dev, const char *devPath, int iface)
+{
+	char linkpath[32] = { 0 };
+	int ret;
+
+	sprintf(linkpath, USB_DEV_SYMLINK_FORMAT, dev->desc.idVendor, dev->desc.idProduct, iface);
+
+	unlink(linkpath);
+	ret = symlink(devPath, linkpath);
+
+	if (ret < 0) {
+		log_error("%s -> %s symlink error: %d", linkpath, devPath, errno);
+	}
+}
+
+
+static void usb_devSymlinksDestroy(usb_dev_t *dev, int iface)
+{
+	char linkpath[32] = { 0 };
+
+	sprintf(linkpath, USB_DEV_SYMLINK_FORMAT, dev->desc.idVendor, dev->desc.idProduct, iface);
+	unlink(linkpath);
+}
+
+
+static void usb_devOnDrvBindCb(usb_dev_t *dev, usb_event_insertion_t *event, int iface)
+{
+	usb_devOid_t *devOid;
+
+	if (event->deviceCreated) {
+		devOid = calloc(1, sizeof(usb_devOid_t));
+
+		if (devOid == NULL) {
+			log_error("calloc failed");
+			return;
+		}
+
+		log_info("Dev oid bound to device with addr %d: port=%u, id=%u\n",
+				dev->address, event->dev.port, (uint32_t)event->dev.id);
+
+		devOid->oid = event->dev;
+		devOid->dev = dev;
+
+		mutexLock(usbdev_common.lock);
+		LIST_ADD(&usbdev_common.devOids, devOid);
+		mutexUnlock(usbdev_common.lock);
+
+		usb_devSymlinksCreate(dev, event->devPath, iface);
+	}
+}
+
+
 int usb_devEnumerate(usb_dev_t *dev)
 {
 	char manufacturerAscii[USB_STR_MAX / 2 + 1];
 	char productAscii[USB_STR_MAX / 2 + 1];
-	int addr, iface;
-	usb_event_insertion_t insertion = { 0 };
+	int addr;
 
 	if (usb_genLocationID(dev) < 0) {
 		log_error("Fail to generate location ID\n");
@@ -604,16 +674,59 @@ int usb_devEnumerate(usb_dev_t *dev)
 		if (hub_conf(dev) != 0)
 			return -1;
 	}
-	else if (usb_drvBind(dev, &insertion, &iface) != 0) {
+	else if (usb_drvBind(dev, usb_devOnDrvBindCb) != 0) {
 		log_msg("Fail to match drivers for device\n");
 		/* TODO: make device orphaned */
-	}
-
-	if (insertion.deviceCreated) {
-		log_info("Driver bound to device with addr %d: %s\n", dev->address, insertion.devPath);
+		return -1;
 	}
 
 	return 0;
+}
+
+
+static usb_dev_t *_usb_devOidFind(oid_t oid)
+{
+	usb_devOid_t *curr = usbdev_common.devOids;
+
+	if (curr != NULL) {
+		do {
+			if (curr->oid.port == oid.port && curr->oid.id == oid.id) {
+				return curr->dev;
+			}
+			curr = curr->next;
+		} while (curr != usbdev_common.devOids);
+	}
+
+	return NULL;
+}
+
+
+static void usb_devFreeOids(usb_dev_t *dev)
+{
+	usb_devOid_t *next, *curr = usbdev_common.devOids;
+
+	bool end = false;
+
+	mutexLock(usbdev_common.lock);
+
+	if (curr != NULL) {
+		do {
+			next = curr->next;
+
+			if (curr == next) {
+				end = true;
+			}
+
+			if (curr->dev == dev) {
+				LIST_REMOVE(&usbdev_common.devOids, curr);
+				free(curr);
+			}
+
+			curr = next;
+		} while (!end && curr != usbdev_common.devOids);
+	}
+
+	mutexUnlock(usbdev_common.lock);
 }
 
 
@@ -622,13 +735,18 @@ static void usb_devUnbind(usb_dev_t *dev)
 	int i;
 
 	for (i = 0; i < dev->nports; i++) {
-		if (dev->devs[i] != NULL)
+		if (dev->devs[i] != NULL) {
 			usb_devUnbind(dev->devs[i]);
+		}
 	}
 
+	usb_devFreeOids(dev);
+
 	for (i = 0; i < dev->nifs; i++) {
-		if (dev->ifs[i].driver)
+		if (dev->ifs[i].driver != NULL) {
+			usb_devSymlinksDestroy(dev, i);
 			usb_drvUnbind(dev->ifs[i].driver, dev, i);
+		}
 	}
 }
 
@@ -660,6 +778,40 @@ usb_dev_t *usb_devFind(usb_dev_t *hub, int locationID)
 	mutexUnlock(usbdev_common.lock);
 
 	return dev;
+}
+
+
+int usb_devFindDescFromOid(oid_t oid, usb_devinfo_desc_t *desc)
+{
+	usb_dev_t *dev;
+
+	if (desc == NULL) {
+		return -EINVAL;
+	}
+
+	mutexLock(usbdev_common.lock);
+
+	dev = _usb_devOidFind(oid);
+	if (dev == NULL) {
+		mutexUnlock(usbdev_common.lock);
+		log_msg("device not found with oid.id=%u oid.port=%u \n", (uint32_t)oid.id, oid.port);
+		return -EINVAL;
+	}
+
+	memcpy(&desc->desc, &dev->desc, sizeof(usb_device_desc_t));
+
+	memcpy(desc->product.str, dev->product.str, dev->product.len);
+	desc->product.len = dev->product.len;
+
+	memcpy(desc->manufacturer.str, dev->manufacturer.str, dev->manufacturer.len);
+	desc->manufacturer.len = dev->manufacturer.len;
+
+	memcpy(desc->serialNumber.str, dev->serialNumber.str, dev->serialNumber.len);
+	desc->serialNumber.len = dev->serialNumber.len;
+
+	mutexUnlock(usbdev_common.lock);
+
+	return 0;
 }
 
 

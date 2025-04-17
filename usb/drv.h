@@ -24,6 +24,9 @@
 #define PORT_INTERNAL (-1)
 
 
+typedef void (*usb_drvOnBindCb_t)(usb_dev_t *dev, usb_event_insertion_t *event, int iface);
+
+
 typedef struct usb_drvpriv {
 	struct usb_drvpriv *next, *prev;
 
@@ -58,7 +61,7 @@ void usb_libDrvDestroy(usb_driver_t *drv);
 void usb_drvAdd(usb_drvpriv_t *drv);
 
 
-int usb_drvBind(usb_dev_t *dev, usb_event_insertion_t *event, int *iface);
+int usb_drvBind(usb_dev_t *dev, usb_drvOnBindCb_t onBindCb);
 
 
 int usb_drvUnbind(usb_drvpriv_t *drv, usb_dev_t *dev, int iface);

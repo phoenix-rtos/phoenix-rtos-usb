@@ -21,7 +21,9 @@
 #include "usbhost.h"
 
 
-enum usb_speed { usb_full_speed = 0, usb_low_speed, usb_high_speed };
+enum usb_speed { usb_full_speed = 0,
+	usb_low_speed,
+	usb_high_speed };
 
 
 typedef struct {
@@ -38,6 +40,12 @@ typedef struct {
 
 	struct usb_drvpriv *driver;
 } usb_iface_t;
+
+
+typedef struct usb_dev_oid {
+	struct usb_dev_oid *next, *prev;
+	oid_t oid;
+} usb_dev_oids_t;
 
 
 typedef struct _usb_dev {
@@ -95,6 +103,9 @@ int usb_isRoothub(usb_dev_t *dev);
 
 
 void usb_devSignal(void);
+
+
+int usb_devFindDescFromOid(oid_t oid, usb_devinfo_desc_t *desc);
 
 
 #endif /* _USB_DEV_H_ */
