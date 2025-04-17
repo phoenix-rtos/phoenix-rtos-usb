@@ -19,6 +19,7 @@
 
 #include <usbdriver.h>
 #include <usbprocdriver.h>
+#include <usbinternal.h>
 
 #include "log.h"
 
@@ -44,26 +45,6 @@ static struct {
 	unsigned srvport;
 	unsigned drvport;
 } usbprocdrv_common;
-
-
-static void usb_hostLookup(oid_t *oid)
-{
-	int ret;
-
-	for (;;) {
-		ret = lookup("devfs/usb", NULL, oid);
-		if (ret >= 0) {
-			break;
-		}
-
-		ret = lookup("/dev/usb", NULL, oid);
-		if (ret >= 0) {
-			break;
-		}
-
-		usleep(1000000);
-	}
-}
 
 
 static void usb_thread(void *arg)
