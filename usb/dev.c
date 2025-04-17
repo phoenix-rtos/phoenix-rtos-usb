@@ -143,7 +143,7 @@ void usb_devFree(usb_dev_t *dev)
 	free(dev->conf);
 
 	for (i = 0; i < dev->nifs; i++)
-		free(dev->ifs[i].str);
+		free(dev->ifs[i].name.str);
 
 	usb_drvPipeFree(NULL, dev->ctrlPipe);
 	if (dev->statusTransfer != NULL) {
@@ -514,7 +514,7 @@ static int usb_getAllStringDescs(usb_dev_t *dev)
 	for (i = 0; i < dev->nifs; i++) {
 		if (dev->ifs[i].desc->iInterface == 0)
 			continue;
-		if (usb_getStringDesc(dev, dev->ifs[i].str, dev->ifs[i].desc->iInterface) != 0)
+		if (usb_getStringDesc(dev, &dev->ifs[i].name, dev->ifs[i].desc->iInterface) != 0)
 			return -ENOMEM;
 	}
 

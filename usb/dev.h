@@ -34,7 +34,7 @@ typedef struct {
 	usb_interface_desc_t *desc;
 	usb_endpoint_desc_t *eps;
 	void *classDesc;
-	usb_lenStr_t *str;
+	usb_lenStr_t name;
 
 	struct usb_drvpriv *driver;
 } usb_iface_t;
