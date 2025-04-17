@@ -30,4 +30,15 @@ typedef struct {
 	unsigned protocol;
 } usb_device_id_t;
 
+
+typedef struct {
+	usb_device_desc_t desc;
+
+	struct {
+		unsigned int len;
+		char str[USB_STR_MAX];
+	} manufacturer, product, serialNumber;
+} __attribute__((packed)) usb_devinfo_desc_t;
+
+
 #endif /* _USB_COMMON_H_ */

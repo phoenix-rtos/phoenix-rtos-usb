@@ -331,6 +331,12 @@ static void usb_msgthr(void *arg)
 						msg.o.err = usb_handleUrbcmd(&msg);
 						break;
 #endif
+					case usb_msg_devdesc:
+						msg.o.err = usb_devFindDescFromOid(umsg->devdesc.oid, msg.o.data);
+						if (msg.o.err == 0) {
+							msg.o.size = sizeof(usb_devinfo_desc_t);
+						}
+						break;
 					default:
 						msg.o.err = -EINVAL;
 						log_error("unsupported usb_msg type: %d\n", umsg->type);
