@@ -122,13 +122,19 @@ typedef struct {
 
 
 typedef struct {
+	oid_t oid;
+} usb_devdesc_t;
+
+
+typedef struct {
 	enum { usb_msg_connect,
 		usb_msg_insertion,
 		usb_msg_deletion,
 		usb_msg_urb,
 		usb_msg_open,
 		usb_msg_urbcmd,
-		usb_msg_completion } type;
+		usb_msg_completion,
+		usb_msg_devdesc } type;
 
 	union {
 		usb_connect_t connect;
@@ -138,8 +144,19 @@ typedef struct {
 		usb_devinfo_t insertion;
 		usb_deletion_t deletion;
 		usb_completion_t completion;
+		usb_devdesc_t devdesc;
 	};
 } usb_msg_t;
+
+
+typedef struct {
+	usb_device_desc_t desc;
+
+	struct {
+		unsigned int len;
+		char str[USB_STR_MAX];
+	} manufacturer, product, serialNumber;
+} __attribute__((packed)) usb_devinfo_desc_t;
 
 
 typedef struct {
@@ -152,6 +169,7 @@ typedef struct {
 
 typedef struct {
 	bool deviceCreated;
+	oid_t dev;
 	char devPath[32];
 } usb_event_insertion_t;
 
