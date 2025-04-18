@@ -23,11 +23,18 @@
 
 enum usb_speed { usb_full_speed = 0, usb_low_speed, usb_high_speed };
 
+
+typedef struct {
+	unsigned int len;
+	char *str;
+} usb_lenStr_t;
+
+
 typedef struct {
 	usb_interface_desc_t *desc;
 	usb_endpoint_desc_t *eps;
 	void *classDesc;
-	char *str;
+	usb_lenStr_t name;
 
 	struct usb_drvpriv *driver;
 } usb_iface_t;
@@ -35,13 +42,15 @@ typedef struct {
 
 typedef struct _usb_dev {
 	struct _usb_dev *next, *prev;
+	rbnode_t node;
 
 	enum usb_speed speed;
 	usb_device_desc_t desc;
 	usb_configuration_desc_t *conf;
-	char *manufacturer;
-	char *product;
-	char *serialNumber;
+
+	usb_lenStr_t manufacturer;
+	usb_lenStr_t product;
+	usb_lenStr_t serialNumber;
 	uint16_t langId;
 
 	int address;
@@ -53,6 +62,11 @@ typedef struct _usb_dev {
 	struct hcd *hcd;
 	struct _usb_dev *hub;
 	int port;
+
+	/* dev oid created by the dev's driver */
+	/* TODO: extend to oids table, one oid per iface */
+	oid_t oid;
+	char devPath[32];
 
 	/* Hub fields */
 	struct _usb_dev **devs;
@@ -87,6 +101,12 @@ int usb_isRoothub(usb_dev_t *dev);
 
 
 void usb_devSignal(void);
+
+
+int usb_devFilterMatch(usb_device_desc_t *dev, usb_interface_desc_t *iface, const usb_device_id_t *filter);
+
+
+int usb_devFindDescFromOid(oid_t oid, usb_devinfo_desc_t *desc);
 
 
 #endif /* _USB_DEV_H_ */

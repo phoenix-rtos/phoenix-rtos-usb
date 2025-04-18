@@ -12,29 +12,39 @@
  */
 
 
+#include <assert.h>
 #include <errno.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <limits.h>
+#include <unistd.h>
 #include <sys/threads.h>
+#include <sys/minmax.h>
 #include <sys/list.h>
+#include <sys/stat.h>
+#include <posix/utils.h>
 
 #include <usb.h>
+#include <usbdriver.h>
 
 #include "usbhost.h"
 #include "dev.h"
 #include "drv.h"
 #include "hcd.h"
 #include "hub.h"
+#include "log.h"
 
 #define USBDEV_BUF_SIZE 0x200
+
 
 struct {
 	handle_t lock;
 	handle_t cond;
 	char *ctrlBuf;
 	char *setupBuf;
+	rbtree_t devtree;
 } usbdev_common;
 
 
@@ -130,13 +140,13 @@ void usb_devFree(usb_dev_t *dev)
 {
 	int i;
 
-	free(dev->manufacturer);
-	free(dev->product);
-	free(dev->serialNumber);
+	free(dev->manufacturer.str);
+	free(dev->product.str);
+	free(dev->serialNumber.str);
 	free(dev->conf);
 
 	for (i = 0; i < dev->nifs; i++)
-		free(dev->ifs[i].str);
+		free(dev->ifs[i].name.str);
 
 	usb_drvPipeFree(NULL, dev->ctrlPipe);
 	if (dev->statusTransfer != NULL) {
@@ -244,7 +254,7 @@ static int usb_getConfiguration(usb_dev_t *dev)
 		uint8_t len = ((struct usb_desc_header *)ptr)->bLength;
 
 		if ((len < sizeof(struct usb_desc_header)) || (len > size)) {
-			USB_LOG("usb: Invalid descriptor size: %u\n", len);
+			log_error("Invalid descriptor size: %u\n", len);
 			break;
 		}
 
@@ -268,7 +278,7 @@ static int usb_getConfiguration(usb_dev_t *dev)
 					}
 				}
 				else {
-					USB_LOG("usb: Interface descriptor with invalid size\n");
+					log_error("Interface descriptor with invalid size\n");
 					ret = -1;
 				}
 				break;
@@ -296,7 +306,7 @@ static int usb_getConfiguration(usb_dev_t *dev)
 					}
 				}
 				else {
-					USB_LOG("usb: Endpoint descriptor with invalid size\n");
+					log_error("Endpoint descriptor with invalid size\n");
 					ret = -1;
 				}
 				break;
@@ -309,7 +319,7 @@ static int usb_getConfiguration(usb_dev_t *dev)
 					dev->desc.bDeviceProtocol = ((usb_interface_association_desc_t *)ptr)->bFunctionProtocol;
 				}
 				else {
-					USB_LOG("usb: Interface assoctiation descriptor with invalid size\n");
+					log_error("Interface assoctiation descriptor with invalid size\n");
 					ret = -1;
 				}
 				break;
@@ -319,7 +329,7 @@ static int usb_getConfiguration(usb_dev_t *dev)
 				break;
 
 			default:
-				USB_LOG("usb: Ignoring unkonown descriptor type: 0x%02x\n", ((struct usb_desc_header *)ptr)->bDescriptorType);
+				log_error("Ignoring unkonown descriptor type: 0x%02x\n", ((struct usb_desc_header *)ptr)->bDescriptorType);
 				break;
 		}
 
@@ -336,7 +346,7 @@ static int usb_getConfiguration(usb_dev_t *dev)
 	}
 
 	if (ret != 0) {
-		USB_LOG("usb: Fail to parse interface descriptors\n");
+		log_error("Fail to parse interface descriptors\n");
 		free(dev->ifs);
 		dev->ifs = NULL;
 		dev->nifs = 0;
@@ -350,63 +360,94 @@ static int usb_getConfiguration(usb_dev_t *dev)
 }
 
 
-static int usb_getStringDesc(usb_dev_t *dev, char **buf, int index)
+static int usb_getStringDesc(usb_dev_t *dev, usb_lenStr_t *dest, int index)
 {
 	usb_string_desc_t desc = { 0 };
-	int i;
-	size_t asciisz;
 
 	if (usb_getDescriptor(dev, USB_DESC_STRING, index, (char *)&desc, sizeof(desc)) < 0) {
-		USB_LOG("usb: Fail to get string descriptor\n");
+		log_error("Fail to get string descriptor\n");
 		return -1;
 	}
-	asciisz = (desc.bLength - 2) / 2;
 
-	/* Convert from unicode to ascii */
-	if ((*buf = calloc(1, asciisz + 1)) == NULL)
+	dest->len = desc.bLength;
+	dest->str = calloc(sizeof(char), dest->len);
+	if (dest->str == NULL) {
 		return -ENOMEM;
+	}
 
-	for (i = 0; i < asciisz; i++)
-		(*buf)[i] = desc.wData[i * 2];
+	memcpy(dest->str, desc.wData, desc.bLength);
 
 	return 0;
 }
 
 
-#define USB_STRING_MAX_LEN 255
+/* assumes dest buffer size >= len / 2 + 1 */
+static unsigned int usb_utf16ToAscii(char *dest, const char *src, unsigned int len)
+{
+	unsigned int asciilen = len / 2;
+	int i;
+
+	if (len < 2) {
+		return 0;
+	}
+
+	for (i = 0; i < asciilen; i++) {
+		dest[i] = src[i * 2];
+	}
+
+	dest[asciilen] = 0;
+
+	return asciilen;
+}
+
+
+static int usb_asciiToUtf16(char *dest, const char *src)
+{
+	unsigned int n = min(strlen(src), USB_STR_MAX);
+	int i;
+
+	for (i = 0; i < n; i++) {
+		dest[i * 2] = src[i];
+		dest[i * 2 + 1] = 0;
+	}
+
+	return 2 * n;
+}
 
 
 static void usb_fallbackProductString(usb_dev_t *dev)
 {
-	char product[USB_STRING_MAX_LEN] = { 0 };
+	char product[USB_STR_MAX] = { 0 };
+	unsigned int len;
 
 	switch (dev->desc.bDeviceClass) {
 		case USB_CLASS_HID:
-			strcpy(product, "USB HID");
+			len = usb_asciiToUtf16(product, "USB HID");
 			break;
 		case USB_CLASS_HUB:
 			switch (dev->desc.bDeviceProtocol) {
 				case USB_HUB_PROTO_ROOT:
-					strcpy(product, "USB Root Hub");
+					len = usb_asciiToUtf16(product, "USB Root Hub");
 					break;
 				case USB_HUB_PROTO_SINGLE_TT:
-					strcpy(product, "USB Single TT Hub");
+					len = usb_asciiToUtf16(product, "USB Single TT Hub");
 					break;
 				default:
-					strcpy(product, "USB Hub");
+					len = usb_asciiToUtf16(product, "USB Hub");
 					break;
 			}
 			break;
 		case USB_CLASS_MASS_STORAGE:
-			strcpy(product, "USB Mass Storage");
+			len = usb_asciiToUtf16(product, "USB Mass Storage");
 			break;
 		default:
-			strcpy(product, "Unknown USB Device");
+			len = usb_asciiToUtf16(product, "Unknown USB Device");
 			break;
 	}
 
-	dev->product = calloc(sizeof(char), strnlen(product, USB_STRING_MAX_LEN) + 1);
-	strcpy(dev->product, product);
+	dev->product.len = len;
+	dev->product.str = calloc(sizeof(char), dev->product.len);
+	memcpy(dev->product.str, product, dev->product.len);
 }
 
 
@@ -414,8 +455,9 @@ static void usb_fallbackManufacturerString(usb_dev_t *dev)
 {
 	char manufacturer[] = "Generic";
 
-	dev->manufacturer = calloc(sizeof(char), strnlen(manufacturer, USB_STRING_MAX_LEN) + 1);
-	strcpy(dev->manufacturer, manufacturer);
+	dev->manufacturer.len = 2 * strnlen(manufacturer, USB_STR_MAX / 2) + 1;
+	dev->manufacturer.str = calloc(sizeof(char), dev->manufacturer.len);
+	usb_asciiToUtf16(dev->manufacturer.str, manufacturer);
 }
 
 
@@ -423,8 +465,9 @@ static void usb_fallbackSerialNumberString(usb_dev_t *dev)
 {
 	char serialNumber[] = "Unknown";
 
-	dev->serialNumber = calloc(sizeof(char), strnlen(serialNumber, USB_STRING_MAX_LEN) + 1);
-	strcpy(dev->serialNumber, serialNumber);
+	dev->serialNumber.len = 2 * strnlen(serialNumber, USB_STR_MAX / 2) + 1;
+	dev->serialNumber.str = calloc(sizeof(char), dev->serialNumber.len);
+	usb_asciiToUtf16(dev->serialNumber.str, serialNumber);
 }
 
 
@@ -474,7 +517,7 @@ static int usb_getAllStringDescs(usb_dev_t *dev)
 	for (i = 0; i < dev->nifs; i++) {
 		if (dev->ifs[i].desc->iInterface == 0)
 			continue;
-		if (usb_getStringDesc(dev, &dev->ifs[i].str, dev->ifs[i].desc->iInterface) != 0)
+		if (usb_getStringDesc(dev, &dev->ifs[i].name, dev->ifs[i].desc->iInterface) != 0)
 			return -ENOMEM;
 	}
 
@@ -484,17 +527,120 @@ static int usb_getAllStringDescs(usb_dev_t *dev)
 }
 
 
+int usb_devFilterMatch(usb_device_desc_t *dev, usb_interface_desc_t *iface, const usb_device_id_t *filter)
+{
+	int match = usbdrv_match;
+
+	if (filter->dclass != USBDRV_ANY) {
+		if ((dev->bDeviceClass != 0 && dev->bDeviceClass == filter->dclass) ||
+				(dev->bDeviceClass == 0 && iface->bInterfaceClass == filter->dclass))
+			match |= usbdrv_class_match;
+		else {
+			return usbdrv_nomatch;
+		}
+	}
+
+	if (filter->subclass != USBDRV_ANY) {
+		if ((dev->bDeviceSubClass != 0 && dev->bDeviceSubClass == filter->subclass) ||
+				(dev->bDeviceSubClass == 0 && iface->bInterfaceSubClass == filter->subclass))
+			match |= usbdrv_subclass_match;
+		else {
+			return usbdrv_nomatch;
+		}
+	}
+
+	if (filter->protocol != USBDRV_ANY) {
+		if ((dev->bDeviceProtocol != 0 && dev->bDeviceProtocol == filter->protocol) ||
+				(dev->bDeviceProtocol == 0 && iface->bInterfaceProtocol == filter->protocol))
+			match |= usbdrv_protocol_match;
+		else {
+			return usbdrv_nomatch;
+		}
+	}
+
+	if (filter->vid != USBDRV_ANY) {
+		if (dev->idVendor == filter->vid)
+			match |= usbdrv_vid_match;
+		else {
+			return usbdrv_nomatch;
+		}
+	}
+
+	if (filter->pid != USBDRV_ANY) {
+		if (dev->idProduct == filter->pid)
+			match |= usbdrv_pid_match;
+		else {
+			return usbdrv_nomatch;
+		}
+	}
+
+	return match;
+}
+
+
+static int usb_devCmp(rbnode_t *node1, rbnode_t *node2)
+{
+	usb_dev_t *dev1 = lib_treeof(usb_dev_t, node, node1);
+	usb_dev_t *dev2 = lib_treeof(usb_dev_t, node, node2);
+
+	if (dev1->oid.id > dev2->oid.id)
+		return 1;
+	if (dev1->oid.id < dev2->oid.id)
+		return -1;
+
+	if (dev1->oid.port > dev2->oid.port)
+		return 1;
+	if (dev1->oid.port < dev2->oid.port)
+		return -1;
+
+	return 0;
+}
+
+
+#define USB_DEV_SYMLINK_FORMAT "/dev/usb-%04x-%04x-if%02d"
+
+
+static void usb_devSymlinksCreate(usb_dev_t *dev)
+{
+	char linkpath[64] = { 0 };
+	int ret;
+
+	/* TODO: handle per iface symlink */
+	sprintf(linkpath, USB_DEV_SYMLINK_FORMAT, dev->desc.idVendor, dev->desc.idProduct, 0);
+
+	unlink(linkpath);
+	ret = symlink(dev->devPath, linkpath);
+
+	if (ret < 0) {
+		log_error("%s -> %s symlink error: %d", linkpath, dev->devPath, errno);
+	}
+}
+
+
+static void usb_devSymlinksDestroy(usb_dev_t *dev)
+{
+	char linkpath[64] = { 0 };
+
+	/* TODO: handle per iface symlink */
+	sprintf(linkpath, USB_DEV_SYMLINK_FORMAT, dev->desc.idVendor, dev->desc.idProduct, 0);
+	unlink(linkpath);
+}
+
+
 int usb_devEnumerate(usb_dev_t *dev)
 {
-	int addr;
+	char manufacturerAscii[USB_STR_MAX / 2 + 1];
+	char productAscii[USB_STR_MAX / 2 + 1];
+	int addr, iface;
+	usb_event_insertion_t insertion = { 0 };
 
 	if (usb_genLocationID(dev) < 0) {
-		USB_LOG("usb: Fail to generate location ID\n");
+		log_error("Fail to generate location ID\n");
 		return -1;
 	}
 
 	if (usb_getDevDesc(dev) < 0) {
-		USB_LOG("usb: Fail to get device descriptor\n");
+		log_error("Fail to get device descriptor\n");
 		return -1;
 	}
 
@@ -502,22 +648,22 @@ int usb_devEnumerate(usb_dev_t *dev)
 	dev->ctrlPipe->maxPacketLen = dev->desc.bMaxPacketSize0;
 
 	if ((addr = hcd_addrAlloc(dev->hcd)) < 0) {
-		USB_LOG("usb: Fail to add device to hcd\n");
+		log_error("Fail to add device to hcd\n");
 		return -1;
 	}
 
 	if (usb_setAddress(dev, addr) < 0) {
-		USB_LOG("usb: Fail to set device address\n");
+		log_error("Fail to set device address\n");
 		return -1;
 	}
 
 	if (usb_getDevDesc(dev) < 0) {
-		USB_LOG("usb: Fail to get device descriptor\n");
+		log_error("Fail to get device descriptor\n");
 		return -1;
 	}
 
 	if (usb_getConfiguration(dev) < 0) {
-		USB_LOG("usb: Fail to get configuration descriptor\n");
+		log_error("Fail to get configuration descriptor\n");
 		return -1;
 	}
 
@@ -526,16 +672,31 @@ int usb_devEnumerate(usb_dev_t *dev)
 	if (!usb_isRoothub(dev))
 		usb_devSetChild(dev->hub, dev->port, dev);
 
-	USB_LOG("usb: New device addr: %d locationID: %08x %s, %s\n", dev->address, dev->locationID,
-			dev->manufacturer, dev->product);
+	usb_utf16ToAscii(manufacturerAscii, dev->manufacturer.str, dev->manufacturer.len);
+	usb_utf16ToAscii(productAscii, dev->product.str, dev->product.len);
+
+	log_msg("New device: %04x:%04x %s, %s (%d, %08x)\n",
+			dev->desc.idVendor, dev->desc.idProduct, manufacturerAscii, productAscii,
+			dev->address, dev->locationID);
 
 	if (dev->desc.bDeviceClass == USB_CLASS_HUB) {
-		if (hub_conf(dev) != 0)
-			return -1;
+		return hub_conf(dev);
 	}
-	else if (usb_drvBind(dev) != 0) {
-		USB_LOG("usb: Fail to match drivers for device\n");
+
+	if (usb_drvBind(dev, &insertion, &iface) != 0) {
+		log_error("Fail to match drivers for device\n");
 		/* TODO: make device orphaned */
+	}
+
+	if (insertion.deviceCreated) {
+		log_msg("Dev oid bound to device with addr %d: port=%d, id=%d\n",
+				dev->address, insertion.dev.port, insertion.dev.id);
+
+		dev->oid = insertion.dev;
+		strncpy(dev->devPath, insertion.devPath, sizeof(dev->devPath));
+		lib_rbInsert(&usbdev_common.devtree, &dev->node);
+
+		usb_devSymlinksCreate(dev);
 	}
 
 	return 0;
@@ -547,13 +708,18 @@ static void usb_devUnbind(usb_dev_t *dev)
 	int i;
 
 	for (i = 0; i < dev->nports; i++) {
-		if (dev->devs[i] != NULL)
+		if (dev->devs[i] != NULL) {
 			usb_devUnbind(dev->devs[i]);
+		}
 	}
 
+	lib_rbRemove(&usbdev_common.devtree, &dev->node);
+	usb_devSymlinksDestroy(dev);
+
 	for (i = 0; i < dev->nifs; i++) {
-		if (dev->ifs[i].driver)
+		if (dev->ifs[i].driver != NULL) {
 			usb_drvUnbind(dev->ifs[i].driver, dev, i);
+		}
 	}
 }
 
@@ -588,10 +754,46 @@ usb_dev_t *usb_devFind(usb_dev_t *hub, int locationID)
 }
 
 
+int usb_devFindDescFromOid(oid_t oid, usb_devinfo_desc_t *desc)
+{
+	usb_dev_t *fdev;
+	usb_dev_t dev;
+
+	if (desc == NULL) {
+		return -EINVAL;
+	}
+
+	dev.oid = oid;
+
+	mutexLock(usbdev_common.lock);
+
+	fdev = lib_treeof(usb_dev_t, node, lib_rbFind(&usbdev_common.devtree, &dev.node));
+	if (fdev == NULL) {
+		log_msg("device not found with oid.id=%d oid.port=%d\n", oid.id, oid.port);
+		return -EINVAL;
+	}
+
+	memcpy(&desc->desc, &fdev->desc, sizeof(usb_device_desc_t));
+
+	memcpy(desc->product.str, fdev->product.str, fdev->product.len);
+	desc->product.len = fdev->product.len;
+
+	memcpy(desc->manufacturer.str, fdev->manufacturer.str, fdev->manufacturer.len);
+	desc->manufacturer.len = fdev->manufacturer.len;
+
+	memcpy(desc->serialNumber.str, fdev->serialNumber.str, fdev->serialNumber.len);
+	desc->serialNumber.len = fdev->serialNumber.len;
+
+	mutexUnlock(usbdev_common.lock);
+
+	return 0;
+}
+
+
 void usb_devDisconnected(usb_dev_t *dev, bool silent)
 {
 	if (!silent) {
-		printf("usb: Device disconnected addr %d locationID: %08x\n", dev->address, dev->locationID);
+		log_msg("Device disconnected addr %d locationID: %08x\n", dev->address, dev->locationID);
 	}
 	usb_devSetChild(dev->hub, dev->port, NULL);
 	usb_devUnbind(dev);
@@ -614,24 +816,26 @@ int usb_isRoothub(usb_dev_t *dev)
 int usb_devInit(void)
 {
 	if (mutexCreate(&usbdev_common.lock) != 0) {
-		USB_LOG("usbdev: Can't create mutex!\n");
+		log_error("Can't create mutex!\n");
 		return -ENOMEM;
 	}
 
 	if (condCreate(&usbdev_common.cond) != 0) {
 		resourceDestroy(usbdev_common.lock);
-		USB_LOG("usbdev: Can't create cond!\n");
+		log_error("Can't create cond!\n");
 		return -ENOMEM;
 	}
 
 	if ((usbdev_common.setupBuf = usb_alloc(USBDEV_BUF_SIZE)) == NULL) {
 		resourceDestroy(usbdev_common.lock);
 		resourceDestroy(usbdev_common.cond);
-		USB_LOG("usbdev: Fail to allocate buffer!\n");
+		log_error("Fail to allocate buffer!\n");
 		return -ENOMEM;
 	}
 
 	usbdev_common.ctrlBuf = usbdev_common.setupBuf + 32;
+
+	lib_rbInit(&usbdev_common.devtree, usb_devCmp, NULL);
 
 	return 0;
 }

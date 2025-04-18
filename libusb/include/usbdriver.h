@@ -22,8 +22,9 @@
 #include <stdbool.h>
 #include <sys/msg.h>
 #include <posix/idtree.h>
+#include <sys/rb.h>
 
-#define USBDRV_ANY ((unsigned)-1)
+#include "usbcommon.h"
 
 
 /* clang-format off */
@@ -43,17 +44,9 @@ enum {
 
 
 typedef struct {
-	unsigned vid;
-	unsigned pid;
-	unsigned dclass;
-	unsigned subclass;
-	unsigned protocol;
-} usb_device_id_t;
-
-
-typedef struct {
 	unsigned port;
 	unsigned nfilters;
+	char name[USB_DRVNAME_MAX];
 } usb_connect_t;
 
 
@@ -118,13 +111,19 @@ typedef struct {
 
 
 typedef struct {
+	oid_t oid;
+} usb_devdesc_t;
+
+
+typedef struct {
 	enum { usb_msg_connect,
 		usb_msg_insertion,
 		usb_msg_deletion,
 		usb_msg_urb,
 		usb_msg_open,
 		usb_msg_urbcmd,
-		usb_msg_completion } type;
+		usb_msg_completion,
+		usb_msg_devdesc } type;
 
 	union {
 		usb_connect_t connect;
@@ -134,6 +133,7 @@ typedef struct {
 		usb_devinfo_t insertion;
 		usb_deletion_t deletion;
 		usb_completion_t completion;
+		usb_devdesc_t devdesc;
 	};
 } usb_msg_t;
 
@@ -146,13 +146,20 @@ typedef struct {
 } usb_modeswitch_t;
 
 
+typedef struct {
+	bool deviceCreated;
+	oid_t dev;
+	char devPath[32];
+} usb_event_insertion_t;
+
+
 typedef struct usb_driver usb_driver_t;
 
 
 typedef int (*usb_completion_handler_t)(usb_driver_t *drv, usb_completion_t *completion, const char *data, size_t len);
 
 
-typedef int (*usb_insertion_handler_t)(usb_driver_t *drv, usb_devinfo_t *devinfo);
+typedef int (*usb_insertion_handler_t)(usb_driver_t *drv, usb_devinfo_t *devinfo, usb_event_insertion_t *event);
 
 
 typedef int (*usb_deletion_handler_t)(usb_driver_t *drv, usb_deletion_t *deletion);
@@ -186,7 +193,7 @@ typedef struct {
 struct usb_driver {
 	usb_driver_t *next, *prev;
 
-	char name[10];
+	char name[USB_DRVNAME_MAX];
 	usb_handlers_t handlers;
 	usb_driverOps_t ops;
 	const usb_pipeOps_t *pipeOps;
@@ -202,9 +209,6 @@ int usb_modeswitchHandle(usb_driver_t *drv, usb_devinfo_t *dev, const usb_modesw
 
 
 const usb_modeswitch_t *usb_modeswitchFind(uint16_t vid, uint16_t pid, const usb_modeswitch_t *modes, int nmodes);
-
-
-int usb_eventsWait(int port, msg_t *msg);
 
 
 int usb_open(usb_driver_t *drv, usb_devinfo_t *dev, usb_transfer_type_t type, usb_dir_t dir);

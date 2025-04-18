@@ -103,14 +103,6 @@ struct usb_transfer_t {
 };
 
 
-#define USB_LOG(fmt, ...) do { printf(fmt, ##__VA_ARGS__); } while (0);
-
-#define USB_TRACE(fmt, ...) \
-	if (0) { \
-		printf("usb, %s: " fmt "\n", __func__ __VA_OPT__(, ) __VA_ARGS__); \
-	}
-
-
 int usb_memInit(void);
 
 
