@@ -76,7 +76,7 @@ static void usb_thread(void *arg)
 
 		switch (umsg->type) {
 			case usb_msg_insertion:
-				drv->handlers.insertion(drv, &umsg->insertion);
+				msg.o.err = drv->handlers.insertion(drv, &umsg->insertion);
 				break;
 			case usb_msg_deletion:
 				drv->handlers.deletion(drv, &umsg->deletion);
