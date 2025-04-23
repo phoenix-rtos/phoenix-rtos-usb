@@ -366,7 +366,7 @@ int usb_drvBind(usb_dev_t *dev, usb_event_insertion_t *event, int *iface)
 
 	msg_t msg = { 0 };
 	usb_msg_t *umsg = (usb_msg_t *)msg.i.raw;
-	int i, err;
+	int i, err, ndrvs = 0;
 
 	msg.type = mtDevCtl;
 	umsg->type = usb_msg_insertion;
@@ -401,17 +401,18 @@ int usb_drvBind(usb_dev_t *dev, usb_event_insertion_t *event, int *iface)
 					break;
 				default:
 					log_error("unexpected driver type: %d\n", drv->type);
+					err = -1;
 					break;
 			}
 
 			if (err == 0) {
-				return 0;
+				ndrvs++;
 			}
 		}
 		/* TODO: Make a device orphaned */
 	}
 
-	return -1;
+	return ndrvs == 0 ? -1 : 0;
 }
 
 
