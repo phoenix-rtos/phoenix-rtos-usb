@@ -364,18 +364,11 @@ int usb_drvBind(usb_dev_t *dev, usb_drvOnBindCb_t onBindCb)
 {
 	usb_drvpriv_t *drv;
 
-	msg_t msg = { 0 };
+	msg_t msg;
 	usb_msg_t *umsg = (usb_msg_t *)msg.i.raw;
 	int i, err, ndrvs = 0;
 
 	usb_event_insertion_t event = { 0 };
-
-	msg.type = mtDevCtl;
-	umsg->type = usb_msg_insertion;
-	umsg->insertion.bus = dev->hcd->num;
-	umsg->insertion.dev = dev->address;
-	umsg->insertion.descriptor = dev->desc;
-	umsg->insertion.locationID = dev->locationID;
 
 	/* FIXME: drvAdd races with drvMatchIface in multi-driver scenario.
 	 * Devices may become orphaned forever if they get added by hcd before the driver
@@ -383,6 +376,14 @@ int usb_drvBind(usb_dev_t *dev, usb_drvOnBindCb_t onBindCb)
 	for (i = 0; i < dev->nifs; i++) {
 		drv = usb_drvMatchIface(dev, &dev->ifs[i]);
 		if (drv != NULL) {
+			memset(&msg, 0, sizeof(msg));
+			msg.type = mtDevCtl;
+			umsg->type = usb_msg_insertion;
+			umsg->insertion.bus = dev->hcd->num;
+			umsg->insertion.dev = dev->address;
+			umsg->insertion.descriptor = dev->desc;
+			umsg->insertion.locationID = dev->locationID;
+
 			dev->ifs[i].driver = drv;
 			umsg->insertion.interface = i;
 
