@@ -19,6 +19,9 @@
 
 #include <usbdriver.h>
 #include <usbprocdriver.h>
+#include <usbinternal.h>
+
+#include "log.h"
 
 
 #ifndef USB_N_UMSG_THREADS
@@ -28,6 +31,10 @@
 #ifndef USB_UMSG_PRIO
 #define USB_UMSG_PRIO 3
 #endif
+
+
+#undef LIBUSB_LOG_TAG
+#define LIBUSB_LOG_TAG "libusb(procdriver)"
 
 
 static usb_pipeOps_t usbprocdrv_pipeOps;
@@ -40,43 +47,30 @@ static struct {
 } usbprocdrv_common;
 
 
-static void usb_hostLookup(oid_t *oid)
-{
-	int ret;
-
-	for (;;) {
-		ret = lookup("devfs/usb", NULL, oid);
-		if (ret >= 0) {
-			break;
-		}
-
-		ret = lookup("/dev/usb", NULL, oid);
-		if (ret >= 0) {
-			break;
-		}
-
-		usleep(1000000);
-	}
-}
-
-
 static void usb_thread(void *arg)
 {
 	usb_driver_t *drv = (usb_driver_t *)arg;
 	msg_t msg = { 0 };
 	usb_msg_t *umsg = (usb_msg_t *)&msg.i.raw;
+	usb_event_insertion_t event;
 	int ret;
+	msg_rid_t rid;
 
 	for (;;) {
-		ret = usb_eventsWait(usbprocdrv_common.drvport, &msg);
-		if (ret < 0) {
-			fprintf(stderr, "usbdrv: error when receiving event from host\n");
-			continue;
-		}
+		do {
+			ret = msgRecv(usbprocdrv_common.drvport, &msg, &rid);
+			if (ret < 0 && ret != -EINTR) {
+				log_error("error when receiving event from host\n");
+				continue;
+			}
+		} while (ret == -EINTR);
 
 		switch (umsg->type) {
 			case usb_msg_insertion:
-				drv->handlers.insertion(drv, &umsg->insertion);
+				msg.o.err = drv->handlers.insertion(drv, &umsg->insertion, &event);
+				if (msg.o.err == 0) {
+					memcpy(msg.o.raw, &event, sizeof(usb_event_insertion_t));
+				}
 				break;
 			case usb_msg_deletion:
 				drv->handlers.deletion(drv, &umsg->deletion);
@@ -85,17 +79,24 @@ static void usb_thread(void *arg)
 				drv->handlers.completion(drv, &umsg->completion, msg.i.data, msg.i.size);
 				break;
 			default:
-				fprintf(stderr, "usbdrv: unknown msg type\n");
+				log_error("unknown msg type\n");
 				break;
+		}
+
+		ret = msgRespond(usbprocdrv_common.drvport, &msg, rid);
+		if (ret < 0) {
+			log_error("error when replying to host\n");
 		}
 	}
 }
 
 
-static int usb_connect(const usb_device_id_t *filters, unsigned int nfilters)
+static int usb_connect(usb_driver_t *drv)
 {
 	msg_t msg = { 0 };
 	usb_msg_t *umsg = (usb_msg_t *)&msg.i.raw;
+	const usb_device_id_t *filters = drv->filters;
+	unsigned int nfilters = drv->nfilters;
 
 	msg.type = mtDevCtl;
 	msg.i.size = sizeof(*filters) * nfilters;
@@ -104,6 +105,7 @@ static int usb_connect(const usb_device_id_t *filters, unsigned int nfilters)
 	umsg->type = usb_msg_connect;
 	umsg->connect.port = usbprocdrv_common.drvport;
 	umsg->connect.nfilters = nfilters;
+	strncpy(umsg->connect.name, drv->name, USB_DRVNAME_MAX);
 
 	return msgSend(usbprocdrv_common.srvport, &msg) < 0;
 }
@@ -130,7 +132,7 @@ int usb_driverProcRun(usb_driver_t *drv, void *args)
 		return -1;
 	}
 
-	ret = usb_connect(drv->filters, drv->nfilters);
+	ret = usb_connect(drv);
 	if (ret < 0) {
 		return -1;
 	}
@@ -138,31 +140,13 @@ int usb_driverProcRun(usb_driver_t *drv, void *args)
 	for (i = 0; i < USB_N_UMSG_THREADS - 1; i++) {
 		ret = beginthread(usb_thread, USB_UMSG_PRIO, usbprocdrv_common.ustack[i], sizeof(usbprocdrv_common.ustack[i]), drv);
 		if (ret < 0) {
-			fprintf(stderr, "usbdrv: fail to beginthread ret: %d\n", ret);
+			log_error("fail to beginthread ret: %d\n", ret);
 			return -1;
 		}
 	}
 
 	priority(USB_UMSG_PRIO);
 	usb_thread(drv);
-
-	return 0;
-}
-
-
-int usb_eventsWait(int port, msg_t *msg)
-{
-	msg_rid_t rid;
-	int err;
-
-	do {
-		err = msgRecv(port, msg, &rid);
-		if (err < 0 && err != -EINTR)
-			return -1;
-	} while (err == -EINTR);
-
-	if (msgRespond(port, msg, rid) < 0)
-		return -1;
 
 	return 0;
 }

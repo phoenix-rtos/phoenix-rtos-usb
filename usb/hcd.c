@@ -21,6 +21,12 @@
 #include "dev.h"
 #include "hub.h"
 #include "hcd.h"
+#include "log.h"
+
+
+#undef USB_LOG_TAG
+#define USB_LOG_TAG "usb-hcd"
+
 
 struct hcd_ops_node {
 	struct hcd_ops_node *prev, *next;
@@ -171,33 +177,33 @@ hcd_t *hcd_init(void)
 	for (i = 0; i < nhcd; i++) {
 		ops = hcd_lookup(info[i].type);
 		if (ops == NULL) {
-			USB_LOG("usb-hcd: No ops found for hcd type %s\n", info[i].type);
+			log_error("No ops found for hcd type %s\n", info[i].type);
 			continue;
 		}
 
 		hcd = hcd_create(ops, &info[i], num++);
 		if (hcd == NULL) {
-			USB_LOG("usb-hcd: Not enough memory to allocate hcd type: %s\n", info[i].type);
+			log_error("Not enough memory to allocate hcd type: %s\n", info[i].type);
 			return res;
 		}
 
 		ret = hcd_roothubInit(hcd);
 		if (ret != 0) {
-			USB_LOG("usb-hcd: Fail to initialize roothub: %s\n", info[i].type);
+			log_error("Fail to initialize roothub: %s\n", info[i].type);
 			hcd_free(hcd);
 			continue;
 		}
 
 		ret = hcd->ops->init(hcd);
 		if (ret != 0) {
-			USB_LOG("usb-hcd: Fail to initialize hcd type: %s\n", info[i].type);
+			log_error("Fail to initialize hcd type: %s\n", info[i].type);
 			hcd_free(hcd);
 			continue;
 		}
 
 		ret = usb_devEnumerate(hcd->roothub);
 		if (ret != 0) {
-			USB_LOG("usb-hcd: Fail to enumerate devices: %s\n", info[i].type);
+			log_error("Fail to enumerate devices: %s\n", info[i].type);
 			hcd_free(hcd);
 			continue;
 		}
