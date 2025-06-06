@@ -23,9 +23,19 @@
 typedef struct {
 	char type[HCD_TYPE_LEN];
 	uintptr_t hcdaddr;
-	uintptr_t phyaddr;
 	int irq;
-	int clk;
+	union {
+		struct {
+			uintptr_t addr;
+			int clk;
+		} phy;
+
+		struct {
+			unsigned char bus;
+			unsigned char dev;
+			unsigned char func;
+		} pci_devId;
+	};
 } hcd_info_t;
 
 typedef struct hcd_ops {
@@ -48,7 +58,7 @@ typedef struct hcd {
 	uint32_t addrmask[4];
 	usb_transfer_t *transfers;
 	handle_t transLock;
-	volatile int *base, *phybase;
+	volatile uint32_t *base, *phybase;
 	void *priv;
 } hcd_t;
 

@@ -3,8 +3,8 @@
  *
  * libusb/driver.c
  *
- * Copyright 2021 Phoenix Systems
- * Author: Maciej Purski
+ * Copyright 2021, 2024 Phoenix Systems
+ * Author: Maciej Purski, Adam Greloch
  *
  * This file is part of Phoenix-RTOS.
  *
@@ -12,112 +12,61 @@
  */
 
 #include <errno.h>
-#include <usbdriver.h>
-#include <sys/msg.h>
+#include <sys/threads.h>
+#include <sys/list.h>
 #include <string.h>
+#include <stdlib.h>
 #include <unistd.h>
+
+#include <usbdriver.h>
 
 
 static struct {
-	unsigned port;
+	usb_driver_t *registeredDrivers;
 } usbdrv_common;
 
 
-int usb_connect(const usb_device_id_t *filters, int nfilters, unsigned drvport)
+void usb_driverRegister(usb_driver_t *driver)
 {
-	msg_t msg = { 0 };
-	usb_msg_t *umsg = (usb_msg_t *)&msg.i.raw;
-	oid_t oid;
-
-	while (lookup("/dev/usb", NULL, &oid) < 0)
-		usleep(1000000);
-
-	msg.type = mtDevCtl;
-	msg.i.size = sizeof(*filters) * nfilters;
-	msg.i.data = (void *)filters;
-
-	umsg->type = usb_msg_connect;
-	umsg->connect.port = drvport;
-	umsg->connect.nfilters = nfilters;
-
-	if (msgSend(oid.port, &msg) < 0)
-		return -1;
-
-	usbdrv_common.port = oid.port;
-
-	return oid.port;
+	LIST_ADD(&usbdrv_common.registeredDrivers, driver);
 }
 
 
-int usb_eventsWait(int port, msg_t *msg)
+usb_driver_t *usb_registeredDriverPop(void)
 {
-	msg_rid_t rid;
-	int err;
-
-	do {
-		err = msgRecv(port, msg, &rid);
-		if (err < 0 && err != -EINTR)
-			return -1;
-	} while (err == -EINTR);
-
-	if (msgRespond(port, msg, rid) < 0)
-		return -1;
-
-	return 0;
-}
-
-
-int usb_open(usb_devinfo_t *dev, usb_transfer_type_t type, usb_dir_t dir)
-{
-	msg_t msg = { 0 };
-	usb_msg_t *umsg = (usb_msg_t *)msg.i.raw;
-	int ret;
-
-	msg.type = mtDevCtl;
-	umsg->type = usb_msg_open;
-
-	umsg->open.bus = dev->bus;
-	umsg->open.dev = dev->dev;
-	umsg->open.iface = dev->interface;
-	umsg->open.type = type;
-	umsg->open.dir = dir;
-	umsg->open.locationID = dev->locationID;
-
-	if ((ret = msgSend(usbdrv_common.port, &msg)) != 0)
-		return ret;
-
-	return msg.o.err;
-}
-
-
-static int usb_urbSubmitSync(usb_urb_t *urb, void *data)
-{
-	msg_t msg = { 0 };
-	usb_msg_t *umsg = (usb_msg_t *)msg.i.raw;
-	int ret;
-
-	msg.type = mtDevCtl;
-	umsg->type = usb_msg_urb;
-
-	memcpy(&umsg->urb, urb, sizeof(usb_urb_t));
-
-	if (urb->dir == usb_dir_out) {
-		msg.i.data = data;
-		msg.i.size = urb->size;
+	usb_driver_t *drv = usbdrv_common.registeredDrivers;
+	if (drv != NULL) {
+		LIST_REMOVE(&usbdrv_common.registeredDrivers, drv);
 	}
-	else {
-		msg.o.data = data;
-		msg.o.size = urb->size;
-	}
-
-	if ((ret = msgSend(usbdrv_common.port, &msg)) != 0)
-		return ret;
-
-	return msg.o.err;
+	return drv;
 }
 
 
-int usb_transferControl(unsigned pipe, usb_setup_packet_t *setup, void *data, size_t size, usb_dir_t dir)
+int usb_open(usb_driver_t *drv, usb_devinfo_t *dev, usb_transfer_type_t type, usb_dir_t dir)
+{
+	return drv->pipeOps->open(drv, dev, type, dir);
+}
+
+
+int usb_urbAlloc(usb_driver_t *drv, unsigned pipe, void *data, usb_dir_t dir, size_t size, int type)
+{
+	return drv->pipeOps->urbAlloc(drv, pipe, data, dir, size, type);
+}
+
+
+int usb_urbFree(usb_driver_t *drv, unsigned pipe, unsigned urb)
+{
+	return drv->pipeOps->urbFree(drv, pipe, urb);
+}
+
+
+int usb_transferAsync(usb_driver_t *drv, unsigned pipe, unsigned urbid, size_t size, usb_setup_packet_t *setup)
+{
+	return drv->pipeOps->transferAsync(drv, pipe, urbid, size, setup);
+}
+
+
+int usb_transferControl(usb_driver_t *drv, unsigned pipe, usb_setup_packet_t *setup, void *data, size_t size, usb_dir_t dir)
 {
 	usb_urb_t urb = {
 		.pipe = pipe,
@@ -128,11 +77,11 @@ int usb_transferControl(unsigned pipe, usb_setup_packet_t *setup, void *data, si
 		.sync = 1
 	};
 
-	return usb_urbSubmitSync(&urb, data);
+	return drv->pipeOps->submitSync(drv, &urb, data);
 }
 
 
-int usb_transferBulk(unsigned pipe, void *data, size_t size, usb_dir_t dir)
+int usb_transferBulk(usb_driver_t *drv, unsigned pipe, void *data, size_t size, usb_dir_t dir)
 {
 	usb_urb_t urb = {
 		.pipe = pipe,
@@ -142,11 +91,11 @@ int usb_transferBulk(unsigned pipe, void *data, size_t size, usb_dir_t dir)
 		.sync = 1
 	};
 
-	return usb_urbSubmitSync(&urb, data);
+	return drv->pipeOps->submitSync(drv, &urb, data);
 }
 
 
-int usb_setConfiguration(unsigned pipe, int conf)
+int usb_setConfiguration(usb_driver_t *drv, unsigned pipe, int conf)
 {
 	usb_setup_packet_t setup = (usb_setup_packet_t) {
 		.bmRequestType = REQUEST_DIR_HOST2DEV | REQUEST_TYPE_STANDARD | REQUEST_RECIPIENT_DEVICE,
@@ -156,11 +105,11 @@ int usb_setConfiguration(unsigned pipe, int conf)
 		.wLength = 0,
 	};
 
-	return usb_transferControl(pipe, &setup, NULL, 0, usb_dir_out);
+	return usb_transferControl(drv, pipe, &setup, NULL, 0, usb_dir_out);
 }
 
 
-int usb_clearFeatureHalt(unsigned pipe, int ep)
+int usb_clearFeatureHalt(usb_driver_t *drv, unsigned pipe, int ep)
 {
 	usb_setup_packet_t setup = (usb_setup_packet_t) {
 		.bmRequestType = REQUEST_DIR_HOST2DEV | REQUEST_TYPE_STANDARD | REQUEST_RECIPIENT_DEVICE,
@@ -170,75 +119,7 @@ int usb_clearFeatureHalt(unsigned pipe, int ep)
 		.wLength = 0,
 	};
 
-	return usb_transferControl(pipe, &setup, NULL, 0, usb_dir_out);
-}
-
-
-int usb_urbAlloc(unsigned pipe, void *data, usb_dir_t dir, size_t size, int type)
-{
-	msg_t msg = { 0 };
-	usb_msg_t *umsg = (usb_msg_t *)msg.i.raw;
-	int ret;
-	usb_urb_t *urb = &umsg->urb;
-
-	urb->pipe = pipe;
-	urb->type = type;
-	urb->dir = dir;
-	urb->size = size;
-	urb->sync = 0;
-
-	msg.type = mtDevCtl;
-	umsg->type = usb_msg_urb;
-
-	if ((ret = msgSend(usbdrv_common.port, &msg)) < 0)
-		return ret;
-
-	/* URB id */
-	return msg.o.err;
-}
-
-
-int usb_transferAsync(unsigned pipe, unsigned urbid, size_t size, usb_setup_packet_t *setup)
-{
-	msg_t msg = { 0 };
-	usb_msg_t *umsg = (usb_msg_t *)msg.i.raw;
-	int ret;
-	usb_urbcmd_t *urbcmd = &umsg->urbcmd;
-
-	urbcmd->pipeid = pipe;
-	urbcmd->size = size;
-	urbcmd->urbid = urbid;
-	urbcmd->cmd = urbcmd_submit;
-
-	if (setup != NULL) {
-		memcpy(&urbcmd->setup, setup, sizeof(*setup));
-	}
-	msg.type = mtDevCtl;
-	umsg->type = usb_msg_urbcmd;
-	if ((ret = msgSend(usbdrv_common.port, &msg)) < 0)
-		return ret;
-
-	return 0;
-}
-
-
-int usb_urbFree(unsigned pipe, unsigned urb)
-{
-	msg_t msg = { 0 };
-	usb_msg_t *umsg = (usb_msg_t *)msg.i.raw;
-	int ret;
-	usb_urbcmd_t *urbcmd = &umsg->urbcmd;
-
-	urbcmd->pipeid = pipe;
-	urbcmd->urbid = urb;
-	urbcmd->cmd = urbcmd_free;
-
-	msg.type = mtDevCtl;
-	umsg->type = usb_msg_urbcmd;
-	if ((ret = msgSend(usbdrv_common.port, &msg)) < 0)
-		return ret;
-
-	return 0;
+	return usb_transferControl(drv, pipe, &setup, NULL, 0, usb_dir_out);
 }
 
 
@@ -324,26 +205,37 @@ void usb_dumpStringDesc(FILE *stream, usb_string_desc_t *descr)
 }
 
 
-int usb_modeswitchHandle(usb_devinfo_t *dev, const usb_modeswitch_t *mode)
+int usb_modeswitchHandle(usb_driver_t *drv, usb_devinfo_t *dev, const usb_modeswitch_t *mode)
 {
 	char msg[sizeof(mode->msg)];
-	int pipeCtrl, pipeIn, pipeOut;
+	int pipeCtrl, pipeIn, pipeOut, ret;
 
-	if ((pipeCtrl = usb_open(dev, usb_transfer_control, 0)) < 0)
+	pipeCtrl = usb_open(drv, dev, usb_transfer_control, 0);
+	if (pipeCtrl < 0) {
 		return -EINVAL;
+	}
 
-	if (usb_setConfiguration(pipeCtrl, 1) != 0)
+	ret = usb_setConfiguration(drv, pipeCtrl, 1);
+	if (ret != 0) {
 		return -EINVAL;
+	}
 
-	if ((pipeIn = usb_open(dev, usb_transfer_bulk, usb_dir_in)) < 0)
+	pipeIn = usb_open(drv, dev, usb_transfer_bulk, usb_dir_in);
+	if (pipeIn < 0) {
 		return -EINVAL;
+	}
 
-	if ((pipeOut = usb_open(dev, usb_transfer_bulk, usb_dir_out)) < 0)
+	pipeOut = usb_open(drv, dev, usb_transfer_bulk, usb_dir_out);
+	if (pipeOut < 0) {
 		return -EINVAL;
+	}
 
 	memcpy(msg, mode->msg, sizeof(msg));
-	if (usb_transferBulk(pipeOut, msg, sizeof(msg), usb_dir_out) < 0)
+
+	ret = usb_transferBulk(drv, pipeOut, msg, sizeof(msg), usb_dir_out);
+	if (ret < 0) {
 		return -EINVAL;
+	}
 
 	return 0;
 }

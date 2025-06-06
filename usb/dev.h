@@ -16,29 +16,48 @@
 #define _USB_DEV_H_
 
 #include <usb.h>
+#include <stdbool.h>
 
 #include "usbhost.h"
 
 
-enum usb_speed { usb_full_speed = 0, usb_low_speed, usb_high_speed };
+enum usb_speed { usb_full_speed = 0,
+	usb_low_speed,
+	usb_high_speed };
+
+
+typedef struct {
+	unsigned int len;
+	char *str;
+} usb_lenStr_t;
+
 
 typedef struct {
 	usb_interface_desc_t *desc;
 	usb_endpoint_desc_t *eps;
 	void *classDesc;
-	char *str;
+	usb_lenStr_t name;
 
-	struct _usb_drv *driver;
+	struct usb_drvpriv *driver;
 } usb_iface_t;
 
 
+typedef struct usb_dev_oid {
+	struct usb_dev_oid *next, *prev;
+	oid_t oid;
+} usb_dev_oids_t;
+
+
 typedef struct _usb_dev {
+	struct _usb_dev *next, *prev;
+
 	enum usb_speed speed;
 	usb_device_desc_t desc;
 	usb_configuration_desc_t *conf;
-	char *manufacturer;
-	char *product;
-	char *serialNumber;
+
+	usb_lenStr_t manufacturer;
+	usb_lenStr_t product;
+	usb_lenStr_t serialNumber;
 	uint16_t langId;
 
 	int address;
@@ -53,7 +72,7 @@ typedef struct _usb_dev {
 
 	/* Hub fields */
 	struct _usb_dev **devs;
-	struct usb_transfer *statusTransfer;
+	usb_transfer_t *statusTransfer;
 	usb_pipe_t *irqPipe;
 	int nports;
 } usb_dev_t;
@@ -71,7 +90,7 @@ usb_dev_t *usb_devAlloc(void);
 int usb_devEnumerate(usb_dev_t *dev);
 
 
-void usb_devDisconnected(usb_dev_t *dev);
+void usb_devDisconnected(usb_dev_t *dev, bool silent);
 
 
 int usb_devInit(void);
@@ -84,6 +103,9 @@ int usb_isRoothub(usb_dev_t *dev);
 
 
 void usb_devSignal(void);
+
+
+int usb_devFindDescFromOid(oid_t oid, usb_devinfo_desc_t *desc);
 
 
 #endif /* _USB_DEV_H_ */
