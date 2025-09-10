@@ -35,6 +35,7 @@ typedef struct {
 typedef struct {
 	usb_interface_desc_t *desc;
 	usb_endpoint_desc_t *eps;
+	usb_generic_desc_t *func;
 	void *classDesc;
 	usb_lenStr_t name;
 
