@@ -427,7 +427,16 @@ static void hub_thread(void *args)
 		mutexLock(hub_common.lock);
 		while (hub_common.events == NULL) {
 			condWait(hub_common.cond, hub_common.lock, HUB_TT_POLL_DELAY_MS);
+
+			/*
+			 * hub_ttStatus may lead to usb_devEnumerate call which may call hub_conf that
+			 * tries to obtain this lock. FIXME? It may be better to separate the enumeration
+			 * from the connect status polling logic, but as this polling loop is a
+			 * part of L2 TT workaround, the problem may be easier to solve itself in the root
+			 */
+			mutexUnlock(hub_common.lock);
 			hub_ttStatus();
+			mutexLock(hub_common.lock);
 		}
 		ev = hub_common.events;
 		LIST_REMOVE(&hub_common.events, ev);
