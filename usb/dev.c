@@ -679,7 +679,6 @@ int usb_devEnumerate(usb_dev_t *dev)
 	else if (usb_drvBind(dev, usb_devOnDrvBindCb) != 0) {
 		log_msg("Fail to match drivers for device\n");
 		/* TODO: make device orphaned */
-		return -1;
 	}
 
 	return 0;
