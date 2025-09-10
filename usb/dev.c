@@ -262,7 +262,7 @@ static int usb_getConfiguration(usb_dev_t *dev)
 		uint8_t len = ((struct usb_desc_header *)ptr)->bLength;
 
 		if ((len < sizeof(struct usb_desc_header)) || (len > size)) {
-			log_error("Invalid descriptor size: %u\n", len);
+			log_error("Invalid descriptor size: %u", len);
 			break;
 		}
 
@@ -286,7 +286,7 @@ static int usb_getConfiguration(usb_dev_t *dev)
 					}
 				}
 				else {
-					log_error("Interface descriptor with invalid size\n");
+					log_error("Interface descriptor with invalid size");
 					ret = -1;
 				}
 				break;
@@ -314,7 +314,7 @@ static int usb_getConfiguration(usb_dev_t *dev)
 					}
 				}
 				else {
-					log_error("Endpoint descriptor with invalid size\n");
+					log_error("Endpoint descriptor with invalid size");
 					ret = -1;
 				}
 				break;
@@ -327,17 +327,19 @@ static int usb_getConfiguration(usb_dev_t *dev)
 					dev->desc.bDeviceProtocol = ((usb_interface_association_desc_t *)ptr)->bFunctionProtocol;
 				}
 				else {
-					log_error("Interface assoctiation descriptor with invalid size\n");
+					log_error("Interface association descriptor with invalid size");
 					ret = -1;
 				}
 				break;
 
-			case USB_DESC_CS_INTERFACE:
-				/* TODO: save Class-Specific Functional Descriptors to be used by device drivers - silently ignored for now */
-				break;
-
 			default:
-				log_error("Ignoring unkonown descriptor type: 0x%02x\n", ((struct usb_desc_header *)ptr)->bDescriptorType);
+				/* assume unknown descriptor type is a class-specific or vendor-specific functional descriptor */
+				if (lastAlternateSetting != 0) {
+					/* TODO: handle alternate setting maybe */
+				}
+				else if (lastIfNum >= 0) {
+					dev->ifs[lastIfNum].func = (usb_generic_desc_t *)ptr;
+				}
 				break;
 		}
 
@@ -346,7 +348,7 @@ static int usb_getConfiguration(usb_dev_t *dev)
 	}
 
 	for (size_t i = 0; i < dev->nifs; i++) {
-		if ((dev->ifs[i].desc == NULL) || (dev->ifs[i].eps == NULL)) {
+		if ((dev->ifs[i].desc == NULL) || ((dev->ifs[i].eps == NULL) && (dev->ifs[i].func == NULL))) {
 			/* Data missing */
 			ret = -1;
 			break;
