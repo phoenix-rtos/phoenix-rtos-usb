@@ -43,6 +43,10 @@
 #undef USB_LOG_TAG
 #define USB_LOG_TAG "usbhub"
 
+#ifndef USB_HUB_TT_WORKAROUND
+#define USB_HUB_TT_WORKAROUND 0
+#endif
+
 
 typedef struct _hub_event {
 	struct _hub_event *next, *prev;
@@ -177,13 +181,6 @@ static int hub_interruptInit(usb_dev_t *hub)
 }
 
 
-static int hub_isTT(usb_dev_t *dev)
-{
-	/* TODO support MTTs */
-	return dev->desc.bDeviceClass == USB_CLASS_HUB && dev->desc.bDeviceProtocol == USB_HUB_PROTO_SINGLE_TT;
-}
-
-
 static int hub_requestStatus(usb_dev_t *hub)
 {
 	return usb_transferSubmit(hub->statusTransfer, hub->irqPipe, NULL);
@@ -262,6 +259,14 @@ static int hub_portDebounce(usb_dev_t *hub, int port)
 }
 
 
+#if USB_HUB_TT_WORKAROUND
+static int hub_isTT(usb_dev_t *dev)
+{
+	/* TODO support MTTs */
+	return dev->desc.bDeviceClass == USB_CLASS_HUB && dev->desc.bDeviceProtocol == USB_HUB_PROTO_SINGLE_TT;
+}
+
+
 static void hub_ttAdd(usb_dev_t *hub)
 {
 	mutexLock(hub_common.lock);
@@ -276,14 +281,17 @@ static void hub_ttRemove(usb_dev_t *hub)
 	LIST_REMOVE(&hub_common.tts, hub);
 	mutexUnlock(hub_common.lock);
 }
+#endif
 
 
 static void hub_devDisconnect(usb_dev_t *dev, bool silent)
 {
-	usb_devDisconnected(dev, silent);
+#if USB_HUB_TT_WORKAROUND
 	if (hub_isTT(dev)) {
 		hub_ttRemove(dev);
 	}
+#endif
+	usb_devDisconnected(dev, silent);
 }
 
 
@@ -399,6 +407,7 @@ static uint32_t hub_getStatus(usb_dev_t *hub)
 }
 
 
+#if USB_HUB_TT_WORKAROUND
 static void hub_ttStatus(void)
 {
 	usb_dev_t *hub;
@@ -415,6 +424,7 @@ static void hub_ttStatus(void)
 		}
 	} while ((hub = hub->next) != hub_common.tts);
 }
+#endif
 
 
 static void hub_thread(void *args)
@@ -426,6 +436,7 @@ static void hub_thread(void *args)
 	for (;;) {
 		mutexLock(hub_common.lock);
 		while (hub_common.events == NULL) {
+#if USB_HUB_TT_WORKAROUND
 			condWait(hub_common.cond, hub_common.lock, HUB_TT_POLL_DELAY_MS);
 
 			/*
@@ -437,6 +448,9 @@ static void hub_thread(void *args)
 			mutexUnlock(hub_common.lock);
 			hub_ttStatus();
 			mutexLock(hub_common.lock);
+#else
+			condWait(hub_common.cond, hub_common.lock, 0);
+#endif
 		}
 		ev = hub_common.events;
 		LIST_REMOVE(&hub_common.events, ev);
@@ -504,14 +518,16 @@ int hub_conf(usb_dev_t *hub)
 	if (hub_interruptInit(hub) != 0)
 		return -EINVAL;
 
+#if USB_HUB_TT_WORKAROUND
 	if (hub_isTT(hub)) {
-		// FIXME Interrupt pipe notifications from tier 2 TTs never come, which is
-		// either a quirk in currently tested hw or an issue in the hcd driver
-
-		// In addition to request an interrupt request, actively poll the status as well
-		// for as a workaround
+		/*
+		 * FIXME Interrupt pipe notifications from tier 2 TTs never come on ia32,
+		 * which is either a quirk in currently tested hw or an issue in the hcd driver.
+		 * As a workaround, try to receive interrupt requests AND actively poll the status.
+		 */
 		hub_ttAdd(hub);
 	}
+#endif
 
 	return hub_requestStatus(hub);
 }
