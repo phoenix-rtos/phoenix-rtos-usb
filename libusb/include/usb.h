@@ -197,6 +197,13 @@ typedef struct {
 /* generic descriptor
  * used when there is no defined descriptor (e.g. HID descriptor or Report descriptor) */
 typedef struct {
+	uint8_t bLength;
+	uint8_t bDescriptorType;
+	uint8_t wData[];
+} __attribute__((packed)) usb_generic_desc_t;
+
+
+typedef struct {
 	uint8_t bFunctionLength;
 	uint8_t bDescriptorType;
 	uint8_t bDescriptorSubtype;
