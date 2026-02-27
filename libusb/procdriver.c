@@ -11,6 +11,7 @@
 
 #include <errno.h>
 #include <sys/msg.h>
+#include <sys/mman.h>
 #include <sys/threads.h>
 #include <sys/list.h>
 #include <string.h>
@@ -24,30 +25,24 @@
 #include "log.h"
 
 
-#ifndef USB_N_UMSG_THREADS
-#define USB_N_UMSG_THREADS 2
-#endif
-
-#ifndef USB_UMSG_PRIO
-#define USB_UMSG_PRIO 3
-#endif
-
-
 #undef LIBUSB_LOG_TAG
 #define LIBUSB_LOG_TAG "libusb(procdriver)"
+
+#ifndef USB_UMSG_STACKSIZE
+#define USB_UMSG_STACKSIZE 2048
+#endif
 
 
 static usb_pipeOps_t usbprocdrv_pipeOps;
 
 
 static struct {
-	char ustack[USB_N_UMSG_THREADS - 1][2048] __attribute__((aligned(8)));
 	unsigned srvport;
 	unsigned drvport;
 } usbprocdrv_common;
 
 
-static void usb_thread(void *arg)
+__attribute__((noreturn)) static void usb_thread(void *arg)
 {
 	usb_driver_t *drv = (usb_driver_t *)arg;
 	msg_t msg = { 0 };
@@ -111,17 +106,19 @@ static int usb_connect(usb_driver_t *drv)
 }
 
 
-int usb_driverProcRun(usb_driver_t *drv, void *args)
+__attribute__((noreturn)) void usb_driverProcRun(usb_driver_t *drv, unsigned int prio, unsigned int nthreads, void *args)
 {
 	oid_t oid;
 	int ret, i;
+	void *stack;
 
 	/* usb_driverProcRun is invoked iff drivers are in the proc variant */
 	drv->pipeOps = &usbprocdrv_pipeOps;
 
 	ret = drv->ops.init(drv, args);
 	if (ret < 0) {
-		return -1;
+		log_error("%s: failed to initialize the driver [%d]", drv->name, ret);
+		exit(1);
 	}
 
 	usb_hostLookup(&oid);
@@ -129,26 +126,32 @@ int usb_driverProcRun(usb_driver_t *drv, void *args)
 
 	ret = portCreate(&usbprocdrv_common.drvport);
 	if (ret != 0) {
-		return -1;
+		log_error("%s: failed to create port [%d]", drv->name, ret);
+		exit(1);
 	}
 
 	ret = usb_connect(drv);
 	if (ret < 0) {
-		return -1;
+		log_error("%s: failed to connect to usbhost [%d]", drv->name, ret);
+		exit(1);
 	}
 
-	for (i = 0; i < USB_N_UMSG_THREADS - 1; i++) {
-		ret = beginthread(usb_thread, USB_UMSG_PRIO, usbprocdrv_common.ustack[i], sizeof(usbprocdrv_common.ustack[i]), drv);
+	for (i = 0; i + 1 < nthreads; i++) {
+		stack = mmap(NULL, USB_UMSG_STACKSIZE, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+		if (stack == MAP_FAILED) {
+			log_error("%s: mmap failed", drv->name);
+			exit(1);
+		}
+
+		ret = beginthread(usb_thread, prio, stack, USB_UMSG_STACKSIZE, drv);
 		if (ret < 0) {
-			log_error("fail to beginthread ret: %d\n", ret);
-			return -1;
+			log_error("%s: failed to start thread [%d]\n", drv->name, ret);
+			exit(1);
 		}
 	}
 
-	priority(USB_UMSG_PRIO);
+	priority(prio);
 	usb_thread(drv);
-
-	return 0;
 }
 
 
