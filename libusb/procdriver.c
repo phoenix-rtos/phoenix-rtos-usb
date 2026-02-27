@@ -17,6 +17,8 @@
 #include <stdlib.h>
 #include <unistd.h>
 
+#include <board_config.h>
+
 #include <usbdriver.h>
 #include <usbprocdriver.h>
 #include <usbinternal.h>
