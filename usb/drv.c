@@ -35,7 +35,6 @@
 struct {
 	handle_t lock;
 	usb_drvpriv_t *drvs;
-	handle_t drvAddedCond;
 } usbdrv_common;
 
 
@@ -282,17 +281,16 @@ static int usb_drvcmp(usb_device_desc_t *dev, usb_interface_desc_t *iface, const
 }
 
 
-static usb_drvpriv_t *usb_drvMatchIface(usb_dev_t *dev, usb_iface_t *iface)
+static usb_drvpriv_t *_usb_drvMatchIface(usb_dev_t *dev, usb_iface_t *iface)
 {
 	usb_alternateSetting_t *alt;
 	usb_drvpriv_t *drv, *best = NULL;
 	int i, match, bestmatch = 0;
 
-	mutexLock(usbdrv_common.lock);
-	while (usbdrv_common.drvs == NULL) {
-		condWait(usbdrv_common.drvAddedCond, usbdrv_common.lock, 0);
-	}
 	drv = usbdrv_common.drvs;
+	if (drv == NULL) {
+		return NULL;
+	}
 
 	i = usb_getAlternateSetting(dev, iface->num);
 	if (i < 0) {
@@ -316,7 +314,6 @@ static usb_drvpriv_t *usb_drvMatchIface(usb_dev_t *dev, usb_iface_t *iface)
 			}
 		}
 	} while ((drv = drv->next) != usbdrv_common.drvs);
-	mutexUnlock(usbdrv_common.lock);
 
 	return best;
 }
@@ -403,7 +400,7 @@ int usb_drvUnbind(usb_drvpriv_t *drv, usb_dev_t *dev, int iface)
 }
 
 
-int usb_drvBind(usb_dev_t *dev, usb_drvOnBindCb_t onBindCb)
+static int _usb_drvBind(usb_dev_t *dev, usb_drvOnBindCb_t onBindCb)
 {
 	usb_drvpriv_t *drv;
 	usb_configuration_t *conf;
@@ -414,9 +411,6 @@ int usb_drvBind(usb_dev_t *dev, usb_drvOnBindCb_t onBindCb)
 
 	usb_event_insertion_t event = { 0 };
 
-	/* FIXME: drvAdd races with drvMatchIface in multi-driver scenario.
-	 * Devices may become orphaned forever if they get added by hcd before the driver
-	 * is connected */
 	for (confnum = 0; confnum < dev->nconfs; confnum++) {
 		conf = &dev->confs[confnum];
 
@@ -427,7 +421,7 @@ int usb_drvBind(usb_dev_t *dev, usb_drvOnBindCb_t onBindCb)
 		}
 
 		for (ifnum = 0; ifnum < conf->nifs; ifnum++) {
-			drv = usb_drvMatchIface(dev, &conf->ifs[ifnum]);
+			drv = _usb_drvMatchIface(dev, &conf->ifs[ifnum]);
 			if (drv != NULL) {
 				memset(&msg, 0, sizeof(msg));
 				msg.type = mtDevCtl;
@@ -467,8 +461,6 @@ int usb_drvBind(usb_dev_t *dev, usb_drvOnBindCb_t onBindCb)
 					ndrvs++;
 				}
 			}
-
-			/* TODO: Make a device orphaned */
 		}
 
 		if (ndrvs > 0) {
@@ -484,6 +476,18 @@ int usb_drvBind(usb_dev_t *dev, usb_drvOnBindCb_t onBindCb)
 	}
 
 	return 0;
+}
+
+
+int usb_drvBind(usb_dev_t *dev, usb_drvOnBindCb_t onBindCb)
+{
+	int ret;
+
+	mutexLock(usbdrv_common.lock);
+	ret = _usb_drvBind(dev, onBindCb);
+	mutexUnlock(usbdrv_common.lock);
+
+	return ret;
 }
 
 
@@ -525,7 +529,9 @@ void usb_drvAdd(usb_drvpriv_t *drv)
 	idtree_init(&drv->pipes);
 	idtree_init(&drv->urbs);
 	LIST_ADD(&usbdrv_common.drvs, drv);
-	condSignal(usbdrv_common.drvAddedCond);
+
+	/* try to bind orphaned devices to the new driver */
+	usb_tryBindOrphans();
 	mutexUnlock(usbdrv_common.lock);
 }
 
@@ -749,13 +755,6 @@ int usb_drvInit(void)
 	ret = mutexCreate(&usbdrv_common.lock);
 	if (ret != 0) {
 		log_error("Can't create mutex!\n");
-		return -ENOMEM;
-	}
-
-	ret = condCreate(&usbdrv_common.drvAddedCond);
-	if (ret != 0) {
-		log_error("Can't create cond!\n");
-		resourceDestroy(usbdrv_common.lock);
 		return -ENOMEM;
 	}
 

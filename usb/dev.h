@@ -113,6 +113,9 @@ int usb_getAlternateSetting(usb_dev_t *dev, int iface);
 usb_dev_t *usb_devAlloc(void);
 
 
+void usb_tryBindOrphans(void);
+
+
 int usb_devEnumerate(usb_dev_t *dev);
 
 

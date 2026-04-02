@@ -52,6 +52,11 @@ struct {
 	char *setupBuf;
 
 	usb_devOid_t *devOids;
+
+	struct {
+		handle_t lock;
+		usb_dev_t *list;
+	} orphans;
 } usbdev_common;
 
 
@@ -744,6 +749,37 @@ static void usb_devOnDrvBindCb(usb_dev_t *dev, usb_event_insertion_t *event, int
 }
 
 
+static int _usb_devBind(usb_dev_t *dev)
+{
+	if (usb_drvBind(dev, usb_devOnDrvBindCb) != 0) {
+		log_msg("Fail to match drivers for device\n");
+		LIST_ADD(&usbdev_common.orphans.list, dev);
+		return -1;
+	}
+
+	return 0;
+}
+
+
+void usb_tryBindOrphans(void)
+{
+	usb_dev_t *orphan, *next;
+
+	mutexLock(usbdev_common.orphans.lock);
+	orphan = usbdev_common.orphans.list;
+	if (orphan != NULL) {
+		do {
+			next = orphan->next;
+			if (_usb_devBind(orphan) == 0) {
+				LIST_REMOVE(&usbdev_common.orphans.list, orphan);
+			}
+			orphan = next;
+		} while (orphan != NULL);
+	}
+	mutexUnlock(usbdev_common.orphans.lock);
+}
+
+
 int usb_devEnumerate(usb_dev_t *dev)
 {
 	char manufacturerAscii[USB_STR_MAX / 2 + 1];
@@ -803,10 +839,9 @@ int usb_devEnumerate(usb_dev_t *dev)
 		}
 	}
 	else {
-		if (usb_drvBind(dev, usb_devOnDrvBindCb) != 0) {
-			log_msg("Fail to match drivers for device\n");
-			/* TODO: make device orphaned */
-		}
+		mutexLock(usbdev_common.orphans.lock);
+		(void)_usb_devBind(dev);
+		mutexUnlock(usbdev_common.orphans.lock);
 	}
 
 	return 0;
@@ -861,6 +896,10 @@ static void usb_devFreeOids(usb_dev_t *dev)
 
 static void usb_devUnbind(usb_dev_t *dev)
 {
+	mutexLock(usbdev_common.orphans.lock);
+	LIST_REMOVE(&usbdev_common.orphans.list, dev);
+	mutexUnlock(usbdev_common.orphans.lock);
+
 	for (int i = 0; i < dev->nports; i++) {
 		if (dev->devs[i] != NULL) {
 			usb_devUnbind(dev->devs[i]);
@@ -980,9 +1019,17 @@ int usb_devInit(void)
 		return -ENOMEM;
 	}
 
+	if (mutexCreate(&usbdev_common.orphans.lock) != 0) {
+		resourceDestroy(usbdev_common.lock);
+		resourceDestroy(usbdev_common.cond);
+		log_error("Can't create orphan mutex!\n");
+		return -ENOMEM;
+	}
+
 	if ((usbdev_common.setupBuf = usb_alloc(USBDEV_BUF_SIZE)) == NULL) {
 		resourceDestroy(usbdev_common.lock);
 		resourceDestroy(usbdev_common.cond);
+		resourceDestroy(usbdev_common.orphans.lock);
 		log_error("Fail to allocate buffer!\n");
 		return -ENOMEM;
 	}
