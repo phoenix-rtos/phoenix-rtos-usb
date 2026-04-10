@@ -253,6 +253,9 @@ int usb_transferAsync(usb_driver_t *drv, unsigned pipe, unsigned urbid, size_t s
 int usb_setConfiguration(usb_driver_t *drv, unsigned pipe, int conf);
 
 
+int usb_setInterface(usb_driver_t *drv, unsigned pipe, int iface, int alt);
+
+
 int usb_urbAlloc(usb_driver_t *drv, unsigned pipe, void *data, usb_dir_t dir, size_t size, int type);
 
 

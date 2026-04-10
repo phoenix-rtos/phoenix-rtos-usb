@@ -109,6 +109,20 @@ int usb_setConfiguration(usb_driver_t *drv, unsigned pipe, int conf)
 }
 
 
+int usb_setInterface(usb_driver_t *drv, unsigned pipe, int iface, int alt)
+{
+	usb_setup_packet_t setup = (usb_setup_packet_t) {
+		.bmRequestType = REQUEST_DIR_HOST2DEV | REQUEST_TYPE_STANDARD | REQUEST_RECIPIENT_INTERFACE,
+		.bRequest = REQ_SET_INTERFACE,
+		.wValue = alt,
+		.wIndex = iface,
+		.wLength = 0,
+	};
+
+	return usb_transferControl(drv, pipe, &setup, NULL, 0, usb_dir_out);
+}
+
+
 int usb_clearFeatureHalt(usb_driver_t *drv, unsigned pipe, int ep)
 {
 	usb_setup_packet_t setup = (usb_setup_packet_t) {
