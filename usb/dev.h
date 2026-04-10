@@ -38,9 +38,25 @@ typedef struct {
 	usb_generic_desc_t *func;
 	void *classDesc;
 	usb_lenStr_t name;
+} usb_alternateSetting_t;
+
+
+typedef struct usb_iface {
+	int num;
+	int nalts;
+	usb_alternateSetting_t *alts;
 
 	struct usb_drvpriv *driver;
 } usb_iface_t;
+
+
+typedef struct {
+	usb_configuration_desc_t *desc;
+	usb_iface_t *ifs;
+	int nifs;
+
+	usb_lenStr_t name;
+} usb_configuration_t;
 
 
 typedef struct usb_dev_oid {
@@ -54,7 +70,9 @@ typedef struct _usb_dev {
 
 	enum usb_speed speed;
 	usb_device_desc_t desc;
-	usb_configuration_desc_t *conf;
+
+	usb_configuration_t *confs;
+	int nconfs;
 
 	usb_lenStr_t manufacturer;
 	usb_lenStr_t product;
@@ -63,8 +81,6 @@ typedef struct _usb_dev {
 
 	int address;
 	uint32_t locationID;
-	usb_iface_t *ifs;
-	int nifs;
 	usb_pipe_t *ctrlPipe;
 
 	struct hcd *hcd;
@@ -83,6 +99,15 @@ usb_dev_t *usb_devFind(usb_dev_t *hub, int locationID);
 
 
 int usb_devCtrl(usb_dev_t *dev, usb_dir_t dir, usb_setup_packet_t *setup, char *buf, size_t len);
+
+
+int usb_setConf(usb_dev_t *dev, int configuration);
+
+
+int usb_getConf(usb_dev_t *dev);
+
+
+int usb_getAlternateSetting(usb_dev_t *dev, int iface);
 
 
 usb_dev_t *usb_devAlloc(void);

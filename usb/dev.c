@@ -119,6 +119,62 @@ static int usb_setAddress(usb_dev_t *dev, int address)
 }
 
 
+int usb_setConf(usb_dev_t *dev, int configuration)
+{
+	if (configuration <= 0) {
+		return -EINVAL;
+	}
+
+	usb_setup_packet_t setup = (usb_setup_packet_t) {
+		.bmRequestType = REQUEST_DIR_HOST2DEV | REQUEST_TYPE_STANDARD | REQUEST_RECIPIENT_DEVICE,
+		.bRequest = REQ_SET_CONFIGURATION,
+		.wValue = configuration,
+		.wIndex = 0,
+		.wLength = 0,
+	};
+
+	return usb_devCtrl(dev, usb_dir_out, &setup, NULL, 0);
+}
+
+
+int usb_getConf(usb_dev_t *dev)
+{
+	char configuration = 0;
+	usb_setup_packet_t setup = (usb_setup_packet_t) {
+		.bmRequestType = REQUEST_DIR_DEV2HOST | REQUEST_TYPE_STANDARD | REQUEST_RECIPIENT_DEVICE,
+		.bRequest = REQ_GET_CONFIGURATION,
+		.wValue = 0,
+		.wIndex = 0,
+		.wLength = sizeof(configuration),
+	};
+
+	if (usb_devCtrl(dev, usb_dir_in, &setup, &configuration, sizeof(configuration)) < 0) {
+		return -1;
+	}
+
+	return configuration;
+}
+
+
+int usb_getAlternateSetting(usb_dev_t *dev, int iface)
+{
+	char alternateSetting;
+	usb_setup_packet_t setup = (usb_setup_packet_t) {
+		.bmRequestType = REQUEST_DIR_DEV2HOST | REQUEST_TYPE_STANDARD | REQUEST_RECIPIENT_INTERFACE,
+		.bRequest = REQ_GET_INTERFACE,
+		.wValue = 0,
+		.wIndex = iface,
+		.wLength = 1,
+	};
+
+	if (usb_devCtrl(dev, usb_dir_in, &setup, &alternateSetting, 1) < 0) {
+		return -1;
+	}
+
+	return alternateSetting;
+}
+
+
 usb_dev_t *usb_devAlloc(void)
 {
 	usb_dev_t *dev;
@@ -145,16 +201,26 @@ usb_dev_t *usb_devAlloc(void)
 
 void usb_devFree(usb_dev_t *dev)
 {
-	int i;
+	int confnum, ifnum, altnum;
 
 	free(dev->manufacturer.str);
 	free(dev->product.str);
 	free(dev->serialNumber.str);
-	free(dev->conf);
 
-	for (i = 0; i < dev->nifs; i++) {
-		free(dev->ifs[i].name.str);
+	for (confnum = 0; confnum < dev->nconfs; confnum++) {
+		for (ifnum = 0; ifnum < dev->confs[confnum].nifs; ifnum++) {
+			for (altnum = 0; altnum < dev->confs[confnum].ifs[ifnum].nalts; altnum++) {
+				free(dev->confs[confnum].ifs[ifnum].alts[altnum].name.str);
+			}
+			free(dev->confs[confnum].ifs[ifnum].alts);
+		}
+		free(dev->confs[confnum].name.str);
+		free(dev->confs[confnum].ifs);
+		free(dev->confs[confnum].desc);
 	}
+	free(dev->confs);
+	dev->confs = NULL;
+	dev->nconfs = 0;
 
 	usb_drvPipeFree(NULL, dev->ctrlPipe);
 	if (dev->statusTransfer != NULL) {
@@ -163,7 +229,6 @@ void usb_devFree(usb_dev_t *dev)
 		free(dev->statusTransfer);
 	}
 
-	free(dev->ifs);
 	free(dev->devs);
 	free(dev);
 }
@@ -222,151 +287,198 @@ static int usb_getDevDesc(usb_dev_t *dev)
 
 static int usb_getConfiguration(usb_dev_t *dev)
 {
-	usb_configuration_desc_t pre, *conf;
+	usb_configuration_desc_t pre;
+	usb_configuration_t *conf;
 	char *ptr;
 	int size;
 	int ret = 0;
+	int confnum;
 
-	/* Get first nine bytes to get to know configuration len */
-	if (usb_getDescriptor(dev, USB_DESC_CONFIG, 0, (char *)&pre, sizeof(pre)) < 0) {
-		return -1;
-	}
-
-	if ((pre.bLength != sizeof(pre)) || (pre.bDescriptorType != USB_DESC_CONFIG) || (pre.wTotalLength < sizeof(pre))) {
-		/* Invalid data returned */
-		return -1;
-	}
-
-	if ((conf = malloc(pre.wTotalLength)) == NULL)
-		return -ENOMEM;
-
-	/* TODO: Handle multiple configuration devices */
-	if (usb_getDescriptor(dev, USB_DESC_CONFIG, 0, (char *)conf, pre.wTotalLength) < 0) {
-		free(conf);
-		return -1;
-	}
-
-	dev->nifs = conf->bNumInterfaces;
-	if ((dev->ifs = calloc(dev->nifs, sizeof(usb_iface_t))) == NULL) {
-		free(conf);
+	dev->confs = calloc(dev->desc.bNumConfigurations, sizeof(usb_configuration_t));
+	if (dev->confs == NULL) {
 		return -ENOMEM;
 	}
+	dev->nconfs = dev->desc.bNumConfigurations;
 
-	ptr = (char *)conf + sizeof(usb_configuration_desc_t);
-	size = pre.wTotalLength - sizeof(usb_configuration_desc_t);
+	for (confnum = 0; confnum < dev->nconfs; confnum++) {
+		conf = &dev->confs[confnum];
 
-
-	int lastIfNum = -1;
-	uint8_t lastAlternateSetting = 0;
-	while ((size >= (int)sizeof(struct usb_desc_header)) && (ret == 0)) {
-		uint8_t len = ((struct usb_desc_header *)ptr)->bLength;
-
-		if ((len < sizeof(struct usb_desc_header)) || (len > size)) {
-			log_error("Invalid descriptor size: %u", len);
+		ret = usb_getDescriptor(dev, USB_DESC_CONFIG, confnum, (char *)&pre, sizeof(pre));
+		if (ret < 0) {
 			break;
 		}
 
-		switch (((struct usb_desc_header *)ptr)->bDescriptorType) {
-			case USB_DESC_INTERFACE:
-				if (len == sizeof(usb_interface_desc_t)) {
-					usb_interface_desc_t *desc = (usb_interface_desc_t *)ptr;
-					lastIfNum = desc->bInterfaceNumber;
-					lastAlternateSetting = desc->bAlternateSetting;
-					if (lastIfNum >= dev->nifs) {
-						/* Invalid interface number */
-						ret = -1;
-						break;
-					}
+		if ((pre.bLength != sizeof(pre)) || (pre.bDescriptorType != USB_DESC_CONFIG) || (pre.wTotalLength < sizeof(pre))) {
+			ret = -EINVAL;
+			break;
+		}
 
-					if (lastAlternateSetting != 0) {
-						/* TODO: handle alternate setting maybe */
+		conf->desc = malloc(pre.wTotalLength);
+		if (conf->desc == NULL) {
+			ret = -ENOMEM;
+			break;
+		}
+
+		ret = usb_getDescriptor(dev, USB_DESC_CONFIG, confnum, (char *)conf->desc, pre.wTotalLength);
+		if (ret < 0) {
+			break;
+		}
+
+		conf->nifs = conf->desc->bNumInterfaces;
+		conf->ifs = calloc(conf->nifs, sizeof(usb_iface_t));
+		if (conf->ifs == NULL) {
+			ret = -ENOMEM;
+			break;
+		}
+
+		ptr = (char *)conf->desc + sizeof(usb_configuration_desc_t);
+		size = pre.wTotalLength - sizeof(usb_configuration_desc_t);
+
+		int lastIfNum = -1;
+		uint8_t lastAlternateSetting = -1;
+		ret = EOK;
+		while ((size >= (int)sizeof(struct usb_desc_header)) && (ret == 0)) {
+			uint8_t len = ((struct usb_desc_header *)ptr)->bLength;
+
+			if ((len < sizeof(struct usb_desc_header)) || (len > size)) {
+				log_error("Invalid descriptor size: %u", len);
+				break;
+			}
+
+			switch (((struct usb_desc_header *)ptr)->bDescriptorType) {
+				case USB_DESC_INTERFACE:
+					if (len == sizeof(usb_interface_desc_t)) {
+						usb_interface_desc_t *desc = (usb_interface_desc_t *)ptr;
+						lastIfNum = desc->bInterfaceNumber;
+						lastAlternateSetting = desc->bAlternateSetting;
+						if (lastIfNum >= conf->nifs) {
+							/* Invalid interface number */
+							ret = -EINVAL;
+							break;
+						}
+						usb_iface_t *iface = &conf->ifs[lastIfNum];
+						/* doesn't matter if we override num as it's the same across all alts */
+						iface->num = lastIfNum;
+
+						if (lastAlternateSetting >= iface->nalts) {
+							/* iface belongs to new alt */
+							int oldsz = iface->nalts * sizeof(usb_alternateSetting_t);
+							void *oldalts = iface->alts;
+
+							iface->nalts = lastAlternateSetting + 1;
+							iface->alts = calloc(iface->nalts, sizeof(usb_alternateSetting_t));
+							if (iface->alts == NULL) {
+								ret = -ENOMEM;
+								break;
+							}
+							memcpy(iface->alts, oldalts, oldsz);
+							free(oldalts);
+						}
+
+						iface->alts[lastAlternateSetting].desc = desc;
 					}
 					else {
-						dev->ifs[lastIfNum].desc = desc;
-					}
-				}
-				else {
-					log_error("Interface descriptor with invalid size");
-					ret = -1;
-				}
-				break;
-
-			case USB_DESC_ENDPOINT:
-				if (len == sizeof(usb_endpoint_desc_t)) {
-					if (lastIfNum < 0) {
-						/* TODO: should this be considered an error? */
+						log_error("Interface descriptor with invalid size");
+						ret = -EINVAL;
 						break;
 					}
+					break;
 
-					if (lastAlternateSetting != 0) {
-						/* Endpoint belongs to alternate setting - we don't handle it right now */
-					}
-					else if (dev->ifs[lastIfNum].eps == NULL) {
-						dev->ifs[lastIfNum].eps = (usb_endpoint_desc_t *)ptr;
-						if (size < (dev->ifs[lastIfNum].desc->bNumEndpoints * sizeof(usb_endpoint_desc_t))) {
-							ret = -1;
+				case USB_DESC_ENDPOINT:
+					if (len == sizeof(usb_endpoint_desc_t)) {
+						if (lastIfNum < 0 || lastAlternateSetting < 0) {
+							log_error("Endpoints present before any interfaces");
+							ret = -EINVAL;
+							break;
+						}
+
+						usb_alternateSetting_t *alt = &conf->ifs[lastIfNum].alts[lastAlternateSetting];
+						if (alt->eps == NULL) {
+							if (size < (alt->desc->bNumEndpoints * sizeof(usb_endpoint_desc_t))) {
+								ret = -EINVAL;
+								break;
+							}
+							else {
+								alt->eps = (usb_endpoint_desc_t *)ptr;
+							}
+						}
+						else if (ptr >= (char *)(alt->eps + alt->desc->bNumEndpoints)) {
+							/* we've already claimed endpoints for this interface and alternate setting */
+							ret = -EINVAL;
 							break;
 						}
 					}
-					else if (ptr >= (char *)(dev->ifs[lastIfNum].eps + dev->ifs[lastIfNum].desc->bNumEndpoints)) {
-						ret = -1;
+					else {
+						log_error("Endpoint descriptor with invalid size");
+						ret = -EINVAL;
 						break;
 					}
-				}
-				else {
-					log_error("Endpoint descriptor with invalid size");
-					ret = -1;
-				}
-				break;
+					break;
 
-			case USB_DESC_INTERFACE_ASSOCIATION:
-				/* FIXME: right now all IADs needs to be of the same class (eg. CDC), multiple classes are not supported */
-				if (len == sizeof(usb_interface_association_desc_t)) {
-					dev->desc.bDeviceClass = ((usb_interface_association_desc_t *)ptr)->bFunctionClass;
-					dev->desc.bDeviceSubClass = ((usb_interface_association_desc_t *)ptr)->bFunctionSubClass;
-					dev->desc.bDeviceProtocol = ((usb_interface_association_desc_t *)ptr)->bFunctionProtocol;
-				}
-				else {
-					log_error("Interface association descriptor with invalid size");
-					ret = -1;
-				}
-				break;
+				case USB_DESC_INTERFACE_ASSOCIATION:
+					/* FIXME: right now all IADs needs to be of the same class (eg. CDC), multiple classes are not supported */
+					if (len == sizeof(usb_interface_association_desc_t)) {
+						dev->desc.bDeviceClass = ((usb_interface_association_desc_t *)ptr)->bFunctionClass;
+						dev->desc.bDeviceSubClass = ((usb_interface_association_desc_t *)ptr)->bFunctionSubClass;
+						dev->desc.bDeviceProtocol = ((usb_interface_association_desc_t *)ptr)->bFunctionProtocol;
+					}
+					else {
+						log_error("Interface association descriptor with invalid size");
+						ret = -EINVAL;
+						break;
+					}
+					break;
 
-			default:
-				/* assume unknown descriptor type is a class-specific or vendor-specific functional descriptor */
-				if (lastAlternateSetting != 0) {
-					/* TODO: handle alternate setting maybe */
-				}
-				else if (lastIfNum >= 0) {
-					dev->ifs[lastIfNum].func = (usb_generic_desc_t *)ptr;
-				}
-				break;
+				default:
+					/* assume unknown descriptor type is a class-specific or vendor-specific functional descriptor */
+					if (lastIfNum >= 0 && lastAlternateSetting >= 0) {
+						conf->ifs[lastIfNum].alts[lastAlternateSetting].func = (usb_generic_desc_t *)ptr;
+					}
+					else {
+						log_error("Out-of-place unknown functional descriptor");
+						ret = -EINVAL;
+						break;
+					}
+					break;
+			}
+
+			size -= len;
+			ptr += len;
 		}
 
-		size -= len;
-		ptr += len;
-	}
-
-	for (size_t i = 0; i < dev->nifs; i++) {
-		if ((dev->ifs[i].desc == NULL) || ((dev->ifs[i].eps == NULL) && (dev->ifs[i].func == NULL))) {
-			/* Data missing */
-			ret = -1;
+		for (size_t ifnum = 0; ifnum < conf->nifs; ifnum++) {
+			usb_iface_t *iface = &conf->ifs[ifnum];
+			for (size_t altnum = 0; altnum < iface->nalts; altnum++) {
+				usb_alternateSetting_t *alt = &iface->alts[altnum];
+				static const usb_alternateSetting_t emptyAlt = { 0 };
+				if ((memcmp(alt, &emptyAlt, sizeof(emptyAlt)) == 0) ||
+						(alt->desc == NULL) || (((alt->desc->bNumEndpoints != 0) && (alt->eps == NULL)) && (alt->func == NULL))) {
+					/* Data missing */
+					ret = -ENODATA;
+					break;
+				}
+			}
+		}
+		if (ret != 0) {
+			log_error("Fail to parse interface descriptors in configuration number %d: %s\n", confnum + 1, strerror(ret));
 			break;
 		}
 	}
 
-	if (ret != 0) {
-		log_error("Fail to parse interface descriptors\n");
-		free(dev->ifs);
-		dev->ifs = NULL;
-		dev->nifs = 0;
-		free(conf);
-		return ret;
+	if (ret < 0) {
+		for (; confnum >= 0; confnum--) {
+			for (size_t ifnum = 0; ifnum < dev->confs[confnum].nifs; ifnum++) {
+				free(dev->confs[confnum].ifs[ifnum].alts);
+			}
+			free(dev->confs[confnum].desc);
+			free(dev->confs[confnum].ifs);
+		}
+		free(dev->confs);
+		dev->confs = NULL;
+		dev->nconfs = 0;
 	}
 
-	dev->conf = conf;
-
-	return 0;
+	return ret;
 }
 
 
@@ -513,7 +625,8 @@ static int usb_fallbackSerialNumberString(usb_dev_t *dev)
 static int usb_getAllStringDescs(usb_dev_t *dev)
 {
 	usb_string_desc_t desc = { 0 };
-	int i, ret;
+	int confnum, ifnum, altnum, ret;
+	usb_alternateSetting_t *alt;
 
 	/* Get an array of language ids */
 	/* String descriptors are optional. If a device omits all string descriptors,
@@ -553,14 +666,24 @@ static int usb_getAllStringDescs(usb_dev_t *dev)
 		usb_fallbackSerialNumberString(dev);
 	}
 
-	for (i = 0; i < dev->nifs; i++) {
-		if (dev->ifs[i].desc->iInterface == 0)
-			continue;
-		if (usb_getStringDesc(dev, &dev->ifs[i].name, dev->ifs[i].desc->iInterface) != 0)
-			return -ENOMEM;
+	for (confnum = 0; confnum < dev->nconfs; confnum++) {
+		if (dev->confs[confnum].desc->iConfiguration != 0) {
+			if (usb_getStringDesc(dev, &dev->confs->name, dev->confs->desc->iConfiguration) != 0) {
+				return -ENOMEM;
+			}
+		}
+		for (ifnum = 0; ifnum < dev->confs[confnum].nifs; ifnum++) {
+			for (altnum = 0; altnum < dev->confs[confnum].ifs[ifnum].nalts; altnum++) {
+				alt = &dev->confs[confnum].ifs[ifnum].alts[altnum];
+				if (alt->desc->iInterface == 0) {
+					continue;
+				}
+				if (usb_getStringDesc(dev, &alt->name, alt->desc->iInterface) != 0) {
+					return -ENOMEM;
+				}
+			}
+		}
 	}
-
-	/* TODO: Configuration string descriptors */
 
 	return 0;
 }
@@ -662,8 +785,9 @@ int usb_devEnumerate(usb_dev_t *dev)
 
 	(void)usb_getAllStringDescs(dev);
 
-	if (!usb_isRoothub(dev))
+	if (!usb_isRoothub(dev)) {
 		usb_devSetChild(dev->hub, dev->port, dev);
+	}
 
 	usb_utf16ToAscii(manufacturerAscii, dev->manufacturer.str, dev->manufacturer.len);
 	usb_utf16ToAscii(productAscii, dev->product.str, dev->product.len);
@@ -673,12 +797,16 @@ int usb_devEnumerate(usb_dev_t *dev)
 			dev->address, dev->locationID);
 
 	if (dev->desc.bDeviceClass == USB_CLASS_HUB) {
-		if (hub_conf(dev) != 0)
+		if (hub_conf(dev) != 0) {
+			log_error("Fail to configure hub\n");
 			return -1;
+		}
 	}
-	else if (usb_drvBind(dev, usb_devOnDrvBindCb) != 0) {
-		log_msg("Fail to match drivers for device\n");
-		/* TODO: make device orphaned */
+	else {
+		if (usb_drvBind(dev, usb_devOnDrvBindCb) != 0) {
+			log_msg("Fail to match drivers for device\n");
+			/* TODO: make device orphaned */
+		}
 	}
 
 	return 0;
@@ -733,9 +861,7 @@ static void usb_devFreeOids(usb_dev_t *dev)
 
 static void usb_devUnbind(usb_dev_t *dev)
 {
-	int i;
-
-	for (i = 0; i < dev->nports; i++) {
+	for (int i = 0; i < dev->nports; i++) {
 		if (dev->devs[i] != NULL) {
 			usb_devUnbind(dev->devs[i]);
 		}
@@ -743,10 +869,12 @@ static void usb_devUnbind(usb_dev_t *dev)
 
 	usb_devFreeOids(dev);
 
-	for (i = 0; i < dev->nifs; i++) {
-		if (dev->ifs[i].driver != NULL) {
-			usb_devSymlinksDestroy(dev, i);
-			usb_drvUnbind(dev->ifs[i].driver, dev, i);
+	for (int confnum = 0; confnum < dev->nconfs; confnum++) {
+		for (int ifnum = 0; ifnum < dev->confs[confnum].nifs; ifnum++) {
+			if (dev->confs[confnum].ifs[ifnum].driver != NULL) {
+				usb_devSymlinksDestroy(dev, ifnum);
+				usb_drvUnbind(dev->confs[confnum].ifs[ifnum].driver, dev, ifnum);
+			}
 		}
 	}
 }

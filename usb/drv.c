@@ -24,6 +24,7 @@
 #include <usb.h>
 #include <usbdriver.h>
 
+#include "dev.h"
 #include "drv.h"
 #include "hcd.h"
 #include "log.h"
@@ -107,6 +108,8 @@ static usb_pipe_t *_usb_drvPipeOpen(usb_drvpriv_t *drv, hcd_t *hcd, int location
 	usb_pipe_t *pipe = NULL;
 	usb_dev_t *dev;
 	usb_iface_t *iface;
+	usb_alternateSetting_t *alt;
+	usb_configuration_t *conf;
 	int i;
 
 	if ((dev = usb_devFind(hcd->roothub, locationID)) == NULL) {
@@ -114,31 +117,58 @@ static usb_pipe_t *_usb_drvPipeOpen(usb_drvpriv_t *drv, hcd_t *hcd, int location
 		return NULL;
 	}
 
-	if (dev->nifs < ifaceID) {
+	i = usb_getConf(dev);
+	if (i < 0) {
+		log_error("Fail to get device configuration\n");
+		return NULL;
+	}
+	if (i == 0) {
+		log_error("Device is not configured\n");
+		return NULL;
+	}
+	if (i > dev->nconfs) {
+		log_error("Device returned invalid configuration\n");
+		return NULL;
+	}
+	conf = &dev->confs[i - 1];
+
+	if (ifaceID > conf->nifs) {
 		log_error("Fail to find iface\n");
 		return NULL;
 	}
 
-	iface = &dev->ifs[ifaceID];
+	iface = &conf->ifs[ifaceID];
+	i = usb_getAlternateSetting(dev, ifaceID);
+	if (i < 0) {
+		/* Fallback to default alt=0 for interfaces that don't report alternate setting */
+		i = 0;
+	}
+	if (i >= iface->nalts) {
+		log_error("Device returned invalid interface's alternate setting\n");
+		return NULL;
+	}
+	alt = &iface->alts[i];
 
 	/* Driver and interface mismatch */
 	if (iface->driver != drv) {
 		return NULL;
 	}
 
-	desc = iface->eps;
+	desc = alt->eps;
 	if (type == usb_transfer_control) {
-		if ((pipe = malloc(sizeof(usb_pipe_t))) == NULL)
+		if ((pipe = malloc(sizeof(usb_pipe_t))) == NULL) {
 			return NULL;
+		}
 		memcpy(pipe, dev->ctrlPipe, sizeof(usb_pipe_t));
 		pipe->hcdpriv = NULL;
 	}
 	else {
 		/* Search interface descriptor for this endpoint */
-		for (i = 0; i < iface->desc->bNumEndpoints; i++) {
+		for (i = 0; i < alt->desc->bNumEndpoints; i++) {
 			if ((desc[i].bmAttributes & 0x3) == type && (desc[i].bEndpointAddress >> 7) == dir) {
-				if ((pipe = usb_pipeAlloc(drv, dev, &desc[i])) == NULL)
+				if ((pipe = usb_pipeAlloc(drv, dev, &desc[i])) == NULL) {
 					return NULL;
+				}
 			}
 		}
 	}
@@ -254,6 +284,7 @@ static int usb_drvcmp(usb_device_desc_t *dev, usb_interface_desc_t *iface, const
 
 static usb_drvpriv_t *usb_drvMatchIface(usb_dev_t *dev, usb_iface_t *iface)
 {
+	usb_alternateSetting_t *alt;
 	usb_drvpriv_t *drv, *best = NULL;
 	int i, match, bestmatch = 0;
 
@@ -263,9 +294,21 @@ static usb_drvpriv_t *usb_drvMatchIface(usb_dev_t *dev, usb_iface_t *iface)
 	}
 	drv = usbdrv_common.drvs;
 
+	i = usb_getAlternateSetting(dev, iface->num);
+	if (i < 0) {
+		/* Fallback to default alt=0 for interfaces that don't report alternate setting */
+		i = 0;
+	}
+	if (i >= iface->nalts) {
+		log_error("Device returned invalid interface's alternate setting\n");
+		mutexUnlock(usbdrv_common.lock);
+		return NULL;
+	}
+	alt = &iface->alts[i];
+
 	do {
 		for (i = 0; i < drv->driver.nfilters; i++) {
-			match = usb_drvcmp(&dev->desc, iface->desc, &drv->driver.filters[i]);
+			match = usb_drvcmp(&dev->desc, alt->desc, &drv->driver.filters[i]);
 
 			if (match > bestmatch) {
 				bestmatch = match;
@@ -363,62 +406,84 @@ int usb_drvUnbind(usb_drvpriv_t *drv, usb_dev_t *dev, int iface)
 int usb_drvBind(usb_dev_t *dev, usb_drvOnBindCb_t onBindCb)
 {
 	usb_drvpriv_t *drv;
+	usb_configuration_t *conf;
 
 	msg_t msg;
 	usb_msg_t *umsg = (usb_msg_t *)msg.i.raw;
-	int i, err, ndrvs = 0;
+	int confnum, ifnum, err, ndrvs = 0;
 
 	usb_event_insertion_t event = { 0 };
 
 	/* FIXME: drvAdd races with drvMatchIface in multi-driver scenario.
 	 * Devices may become orphaned forever if they get added by hcd before the driver
 	 * is connected */
-	for (i = 0; i < dev->nifs; i++) {
-		drv = usb_drvMatchIface(dev, &dev->ifs[i]);
-		if (drv != NULL) {
-			memset(&msg, 0, sizeof(msg));
-			msg.type = mtDevCtl;
-			umsg->type = usb_msg_insertion;
-			umsg->insertion.bus = dev->hcd->num;
-			umsg->insertion.dev = dev->address;
-			umsg->insertion.descriptor = dev->desc;
-			umsg->insertion.locationID = dev->locationID;
+	for (confnum = 0; confnum < dev->nconfs; confnum++) {
+		conf = &dev->confs[confnum];
 
-			dev->ifs[i].driver = drv;
-			umsg->insertion.interface = i;
-
-			switch (drv->type) {
-				case usb_drvType_intrn:
-					err = drv->driver.handlers.insertion(&drv->driver, &umsg->insertion, &event);
-					break;
-				case usb_drvType_extrn:
-					err = msgSend(drv->extrn.port, &msg);
-					if (err == 0) {
-						err = msg.o.err;
-					}
-
-					if (err == 0) {
-						memcpy(&event, msg.o.raw, sizeof(usb_event_insertion_t));
-					}
-					break;
-				default:
-					log_error("unexpected driver type: %d\n", drv->type);
-					err = -1;
-					break;
-			}
-
-			if (err == 0) {
-				if (onBindCb != NULL) {
-					onBindCb(dev, &event, i);
-				}
-				ndrvs++;
-			}
+		/* change to this configuration */
+		err = usb_setConf(dev, confnum + 1);
+		if (err < 0) {
+			return err;
 		}
 
-		/* TODO: Make a device orphaned */
+		for (ifnum = 0; ifnum < conf->nifs; ifnum++) {
+			drv = usb_drvMatchIface(dev, &conf->ifs[ifnum]);
+			if (drv != NULL) {
+				memset(&msg, 0, sizeof(msg));
+				msg.type = mtDevCtl;
+				umsg->type = usb_msg_insertion;
+				umsg->insertion.bus = dev->hcd->num;
+				umsg->insertion.dev = dev->address;
+				umsg->insertion.descriptor = dev->desc;
+				umsg->insertion.locationID = dev->locationID;
+
+				conf->ifs[ifnum].driver = drv;
+				umsg->insertion.interface = ifnum;
+
+				switch (drv->type) {
+					case usb_drvType_intrn:
+						err = drv->driver.handlers.insertion(&drv->driver, &umsg->insertion, &event);
+						break;
+					case usb_drvType_extrn:
+						err = msgSend(drv->extrn.port, &msg);
+						if (err == 0) {
+							err = msg.o.err;
+						}
+
+						if (err == 0) {
+							memcpy(&event, msg.o.raw, sizeof(usb_event_insertion_t));
+						}
+						break;
+					default:
+						log_error("unexpected driver type: %d\n", drv->type);
+						err = -1;
+						break;
+				}
+
+				if (err == 0) {
+					if (onBindCb != NULL) {
+						onBindCb(dev, &event, ifnum);
+					}
+					ndrvs++;
+				}
+			}
+
+			/* TODO: Make a device orphaned */
+		}
+
+		if (ndrvs > 0) {
+			/* don't check next configurations if we already bound any drivers to this one */
+			break;
+		}
 	}
 
-	return ndrvs == 0 ? -1 : 0;
+	if (ndrvs == 0) {
+		/* default to configuration 1 */
+		(void)usb_setConf(dev, 1);
+		return -1;
+	}
+
+	return 0;
 }
 
 

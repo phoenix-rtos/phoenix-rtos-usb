@@ -28,6 +28,7 @@
 
 #include "usbhost.h"
 #include "hub.h"
+#include "dev.h"
 #include "drv.h"
 #include "hcd.h"
 #include "dev.h"
@@ -68,20 +69,6 @@ static int hub_getDesc(usb_dev_t *hub, char *buf, size_t len)
 	};
 
 	return usb_devCtrl(hub, usb_dir_in, &setup, buf, len);
-}
-
-
-static int hub_setConf(usb_dev_t *hub, int conf)
-{
-	usb_setup_packet_t setup = (usb_setup_packet_t) {
-		.bmRequestType = REQUEST_DIR_HOST2DEV | REQUEST_TYPE_STANDARD | REQUEST_RECIPIENT_DEVICE,
-		.bRequest = REQ_SET_CONFIGURATION,
-		.wValue = conf,
-		.wIndex = 0,
-		.wLength = 0,
-	};
-
-	return usb_devCtrl(hub, usb_dir_out, &setup, NULL, 0);
 }
 
 
@@ -419,7 +406,7 @@ int hub_conf(usb_dev_t *hub)
 	usb_hub_desc_t *desc;
 	int i;
 
-	if (hub_setConf(hub, 1) < 0) {
+	if (usb_setConf(hub, 1) < 0) {
 		log_error("Fail to set configuration!\n");
 		return -EINVAL;
 	}
@@ -445,8 +432,9 @@ int hub_conf(usb_dev_t *hub)
 		}
 	}
 
-	if (hub_interruptInit(hub) != 0)
+	if (hub_interruptInit(hub) != 0) {
 		return -EINVAL;
+	}
 
 	return hub_requestStatus(hub);
 }

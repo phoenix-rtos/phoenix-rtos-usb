@@ -230,11 +230,6 @@ int usb_modeswitchHandle(usb_driver_t *drv, usb_devinfo_t *dev, const usb_modesw
 		return -EINVAL;
 	}
 
-	ret = usb_setConfiguration(drv, pipeCtrl, 1);
-	if (ret != 0) {
-		return -EINVAL;
-	}
-
 	pipeIn = usb_open(drv, dev, usb_transfer_bulk, usb_dir_in);
 	if (pipeIn < 0) {
 		return -EINVAL;
