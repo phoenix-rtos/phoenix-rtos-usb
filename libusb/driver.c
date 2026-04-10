@@ -184,14 +184,15 @@ void usb_dumpConfigurationDescriptor(FILE *stream, usb_configuration_desc_t *des
 }
 
 
-void usb_dumpInferfaceDesc(FILE *stream, usb_interface_desc_t *descr)
+void usb_dumpInterfaceDesc(FILE *stream, usb_interface_desc_t *descr)
 {
 	fprintf(stream, "INTERFACE DESCRIPTOR:\n");
 	fprintf(stream, "\tbLength: %d\n", descr->bLength);
 	fprintf(stream, "\tbDescriptorType: 0x%x\n", descr->bDescriptorType);
 	fprintf(stream, "\tbInterfaceNumber: %d\n", descr->bInterfaceNumber);
+	fprintf(stream, "\tbAlternateSetting: %d\n", descr->bAlternateSetting);
 	fprintf(stream, "\tbNumEndpoints: %d\n", descr->bNumEndpoints);
-	fprintf(stream, "\tbInterfaceClass: %x\n", descr->bInterfaceClass);
+	fprintf(stream, "\tbInterfaceClass: 0x%x\n", descr->bInterfaceClass);
 	fprintf(stream, "\tbInterfaceSubClass: 0x%x\n", descr->bInterfaceSubClass);
 	fprintf(stream, "\tbInterfaceProtocol: 0x%x\n", descr->bInterfaceProtocol);
 	fprintf(stream, "\tiInterface: %d\n", descr->iInterface);

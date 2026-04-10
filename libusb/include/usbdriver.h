@@ -271,7 +271,7 @@ void usb_dumpDeviceDescriptor(FILE *stream, usb_device_desc_t *descr);
 void usb_dumpConfigurationDescriptor(FILE *stream, usb_configuration_desc_t *descr);
 
 
-void usb_dumpInferfaceDesc(FILE *stream, usb_interface_desc_t *descr);
+void usb_dumpInterfaceDesc(FILE *stream, usb_interface_desc_t *descr);
 
 
 void usb_dumpEndpointDesc(FILE *stream, usb_endpoint_desc_t *descr);
