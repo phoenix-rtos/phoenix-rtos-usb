@@ -299,7 +299,6 @@ static usb_drvpriv_t *_usb_drvMatchIface(usb_dev_t *dev, usb_iface_t *iface)
 	}
 	if (i >= iface->nalts) {
 		log_error("Device returned invalid interface's alternate setting\n");
-		mutexUnlock(usbdrv_common.lock);
 		return NULL;
 	}
 	alt = &iface->alts[i];
@@ -400,7 +399,7 @@ int usb_drvUnbind(usb_drvpriv_t *drv, usb_dev_t *dev, int iface)
 }
 
 
-static int _usb_drvBind(usb_dev_t *dev, usb_drvOnBindCb_t onBindCb)
+int _usb_drvBind(usb_dev_t *dev, usb_drvOnBindCb_t onBindCb)
 {
 	usb_drvpriv_t *drv;
 	usb_configuration_t *conf;
@@ -523,13 +522,15 @@ usb_drvpriv_t *usb_drvFind(int id)
 }
 
 
+#include <unistd.h>
 void usb_drvAdd(usb_drvpriv_t *drv)
 {
+	sleep(10);
+	printf("Added driver %s\n", drv->driver.name);
 	mutexLock(usbdrv_common.lock);
 	idtree_init(&drv->pipes);
 	idtree_init(&drv->urbs);
 	LIST_ADD(&usbdrv_common.drvs, drv);
-
 	/* try to bind orphaned devices to the new driver */
 	usb_tryBindOrphans();
 	mutexUnlock(usbdrv_common.lock);
