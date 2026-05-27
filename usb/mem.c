@@ -196,8 +196,9 @@ void usb_free(void *ptr, size_t size)
 	else {
 		prev = buf->head;
 		/* Find, where to put the freed chunk */
-		while (prev->next < hdr && prev->next != NULL)
+		while (prev->next != NULL && prev->next < hdr) {
 			prev = prev->next;
+		}
 
 		next = prev->next;
 		if ((struct usb_chunk_hdr *)((uintptr_t)prev + prev->size) == ptr) {
