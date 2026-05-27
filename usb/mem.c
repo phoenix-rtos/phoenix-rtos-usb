@@ -120,51 +120,58 @@ static usb_buf_t *usb_allocBuffer(void)
 
 static void *usb_allocFrom(usb_buf_t *buf, size_t size)
 {
-	struct usb_chunk_hdr *prev, *next, *hdr = NULL;
+	while (buf != NULL) {
+		struct usb_chunk_hdr *prev, *next, *hdr = NULL;
 
-	/* Search for a chunk in this buffer */
-	if (buf->freesz >= size) {
-		prev = buf->head;
-		hdr = buf->head;
-		if (hdr->size < size) {
-			hdr = hdr->next;
-			while (hdr != NULL && hdr->size < size) {
-				prev = hdr;
+		/* Search for a chunk in this buffer */
+		if (buf->freesz >= size && buf->head != NULL) {
+			prev = buf->head;
+			hdr = buf->head;
+			if (hdr->size < size) {
 				hdr = hdr->next;
+				while (hdr != NULL && hdr->size < size) {
+					prev = hdr;
+					hdr = hdr->next;
+				}
 			}
 		}
-	}
 
-	/* No big enough chunks in this buffer */
-	if (hdr == NULL) {
-		/* Alloc next buffer */
-		if (buf->next == NULL) {
-			if ((buf->next = usb_allocBuffer()) == NULL)
-				return NULL;
+		/* No big enough chunks in this buffer */
+		if (hdr == NULL) {
+			if (buf->next == NULL) {
+				/* Alloc next buffer */
+				buf->next = usb_allocBuffer();
+				if (buf->next == NULL) {
+					return NULL;
+				}
+			}
+			buf = buf->next;
+			continue;
 		}
 
-		return usb_allocFrom(buf->next, size);
+		if (hdr->size > size) {
+			/* Shrink this chunk */
+			next = (struct usb_chunk_hdr *)((char *)hdr + size);
+			next->next = hdr->next;
+			next->size = hdr->size - size;
+		}
+		else {
+			next = hdr->next;
+		}
+
+		if (hdr == buf->head) {
+			buf->head = next;
+		}
+		else {
+			prev->next = next;
+		}
+
+		buf->freesz -= size;
+		memset(hdr, 0, size);
+
+		return (void *)hdr;
 	}
-
-	if (hdr->size > size) {
-		/* Shrink this chunk */
-		next = (struct usb_chunk_hdr *)((char *)hdr + size);
-		next->next = hdr->next;
-		next->size = hdr->size - size;
-	}
-	else {
-		next = hdr->next;
-	}
-
-	if (hdr == buf->head)
-		buf->head = next;
-	else
-		prev->next = next;
-
-	buf->freesz -= size;
-	memset(hdr, 0, size);
-
-	return (void *)hdr;
+	return NULL;
 }
 
 
