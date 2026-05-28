@@ -93,6 +93,15 @@ void *usb_allocAligned(size_t size, size_t alignment)
 
 void usb_freeAligned(void *ptr, size_t size)
 {
+	if (ptr == NULL || size == 0) {
+		return;
+	}
+
+	/*
+	 * TODO: verify that the ptr indeed comes from usb_allocAligned allocation. This is a larger
+	 * task of adding the proper allocation tracking here.
+	 */
+	size = (size + (_PAGE_SIZE - 1)) & ~(_PAGE_SIZE - 1);
 	munmap(ptr, size);
 }
 
@@ -185,6 +194,7 @@ void usb_free(void *ptr, size_t size)
 
 	size = (size + (USB_CHUNK_SIZE - 1)) & ~(USB_CHUNK_SIZE - 1);
 	if (size > USB_BUF_SIZE - USB_CHUNK_SIZE) {
+		size = (size + (_PAGE_SIZE - 1)) & ~(_PAGE_SIZE - 1);
 		munmap(ptr, size);
 		return;
 	}
