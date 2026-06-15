@@ -139,6 +139,7 @@ static usb_pipe_t *_usb_drvPipeOpen(usb_drvpriv_t *drv, hcd_t *hcd, int location
 			if ((desc[i].bmAttributes & 0x3) == type && (desc[i].bEndpointAddress >> 7) == dir) {
 				if ((pipe = usb_pipeAlloc(drv, dev, &desc[i])) == NULL)
 					return NULL;
+				break;
 			}
 		}
 	}
