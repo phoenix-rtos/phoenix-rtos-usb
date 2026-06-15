@@ -619,6 +619,7 @@ static int _usb_handleUrb(msg_t *msg, unsigned int port, unsigned long rid)
 	}
 	else {
 		log_error("urb handler/recipient type mismatch\n");
+		usb_transferFree(t);
 		return -EINVAL;
 	}
 	t->pipeid = urb->pipe;
