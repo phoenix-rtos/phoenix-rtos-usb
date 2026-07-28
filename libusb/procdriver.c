@@ -100,7 +100,7 @@ static int usb_connect(usb_driver_t *drv)
 	umsg->type = usb_msg_connect;
 	umsg->connect.port = usbprocdrv_common.drvport;
 	umsg->connect.nfilters = nfilters;
-	strncpy(umsg->connect.name, drv->name, USB_DRVNAME_MAX);
+	memcpy(umsg->connect.name, drv->name, USB_DRVNAME_MAX);
 
 	return msgSend(usbprocdrv_common.srvport, &msg) < 0;
 }
