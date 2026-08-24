@@ -6,9 +6,14 @@
 
 NAME := usb
 LOCAL_SRCS := usb.c dev.c drv.c hcd.c hub.c mem.c
-LOCAL_HEADERS := hcd.h hub.h dev.h drv.h usbhost.h
+LOCAL_HEADERS := hcd.h hub.h dev.h drv.h usbhost.h usbmon.h
 LIBS := $(USB_HCD_LIBS) $(USB_HOSTDRV_LIBS) libusb
 DEPS := libusb
+
+ifdef USBMON
+  CFLAGS += -DUSBMON
+  LOCAL_SRCS += usbmon.c
+endif
 
 ifneq ($(USB_HOSTDRV_LIBS),)
  CFLAGS += -DUSB_INTERNAL_ONLY

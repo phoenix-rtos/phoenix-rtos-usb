@@ -127,6 +127,13 @@ typedef struct {
 
 
 typedef struct {
+	enum { usb_usbmon_start,
+		usb_usbmon_stop } action;
+	uint32_t snaplen; /* max payload bytes to capture (0 = default) */
+} usb_usbmon_t;
+
+
+typedef struct {
 	enum { usb_msg_connect,
 		usb_msg_insertion,
 		usb_msg_deletion,
@@ -134,7 +141,8 @@ typedef struct {
 		usb_msg_open,
 		usb_msg_urbcmd,
 		usb_msg_completion,
-		usb_msg_devdesc } type;
+		usb_msg_devdesc,
+		usb_msg_usbmon } type;
 
 	union {
 		usb_connect_t connect;
@@ -145,6 +153,7 @@ typedef struct {
 		usb_deletion_t deletion;
 		usb_completion_t completion;
 		usb_devdesc_t devdesc;
+		usb_usbmon_t usbmon;
 	};
 } usb_msg_t;
 
