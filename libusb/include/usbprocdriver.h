@@ -23,7 +23,7 @@
  * Threads concurrently process insertion/deletion/completion events with provided driver->handlers. Calls exit(1)
  * on any failure.
  */
-__attribute__((noreturn)) void usb_driverProcRun(usb_driver_t *driver, unsigned int prio, unsigned int nthreads, void *args);
+__attribute__((noreturn)) void usb_driverProcRun(usb_driver_t *driver, int prio, unsigned int nthreads, void *args);
 
 
 #endif
