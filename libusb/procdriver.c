@@ -106,7 +106,7 @@ static int usb_connect(usb_driver_t *drv)
 }
 
 
-__attribute__((noreturn)) void usb_driverProcRun(usb_driver_t *drv, unsigned int prio, unsigned int nthreads, void *args)
+__attribute__((noreturn)) void usb_driverProcRun(usb_driver_t *drv, int prio, unsigned int nthreads, void *args)
 {
 	oid_t oid;
 	int ret, i;
