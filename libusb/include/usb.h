@@ -101,6 +101,10 @@
 
 #define USB_TIMEOUT 5000000
 
+#define USB_WIDE_STR_HELPER(x) u##x
+#define USB_WIDE_STR(x)        USB_WIDE_STR_HELPER(x)
+
+
 enum { pid_out = 0xe1, pid_in = 0x69, pid_setup = 0x2d };
 
 
@@ -180,7 +184,10 @@ typedef struct {
 typedef struct {
 	uint8_t bLength;
 	uint8_t bDescriptorType;
-	uint8_t wData[256];
+	union {
+		uint8_t wData[256];
+		uint16_t wData16[128];
+	};
 } __attribute__((packed)) usb_string_desc_t;
 
 

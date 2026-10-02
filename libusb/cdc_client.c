@@ -17,7 +17,39 @@
 #include <string.h>
 #include <sys/list.h>
 #include <usbclient.h>
+#include <board_config.h>
 #include "cdc_client.h"
+
+/* TODO: Ensure the USB stack works on Big-Endian devices */
+#if defined(__BYTE_ORDER__) && defined(__ORDER_LITTLE_ENDIAN__)
+_Static_assert(__BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__, "Error: USB Descriptors rely on Little-Endian memory layout!");
+#endif
+
+#ifndef CDC_CLIENT_ID_VENDOR
+#define CDC_CLIENT_ID_VENDOR 0x16f9
+#endif
+
+#ifndef CDC_CLIENT_ID_PRODUCT
+#define CDC_CLIENT_ID_PRODUCT 0x0003
+#endif
+
+#ifndef CDC_CLIENT_BCD_DEVICE
+#define CDC_CLIENT_BCD_DEVICE 0x0200
+#endif
+
+#ifndef CDC_CLIENT_PROD_NAME
+#define CDC_CLIENT_PROD_NAME "Virtual COM Port"
+#endif
+
+#ifndef CDC_CLIENT_MFG_NAME
+#define CDC_CLIENT_MFG_NAME "Phoenix Systems"
+#endif
+
+_Static_assert((sizeof(CDC_CLIENT_MFG_NAME) - 1) * 2 <= sizeof(((usb_string_desc_t *)0)->wData),
+		"USB: Manufacturer name can be at most 128 characters long");
+_Static_assert((sizeof(CDC_CLIENT_PROD_NAME) - 1) * 2 <= sizeof(((usb_string_desc_t *)0)->wData),
+		"USB: Product name can be at most 128 characters long");
+
 
 struct {
 	usb_desc_list_t *descList;
@@ -56,9 +88,9 @@ static const usb_device_desc_t dDev = {
 	.bDeviceSubClass = 0,
 	.bDeviceProtocol = 0,
 	.bMaxPacketSize0 = 64,
-	.idVendor = 0x16f9,
-	.idProduct = 0x0003,
-	.bcdDevice = 0x0200,
+	.idVendor = CDC_CLIENT_ID_VENDOR,
+	.idProduct = CDC_CLIENT_ID_PRODUCT,
+	.bcdDevice = CDC_CLIENT_BCD_DEVICE,
 	.iManufacturer = 1,
 	.iProduct = 2,
 	.iSerialNumber = 0,
@@ -179,9 +211,9 @@ static const usb_endpoint_desc_t dEpIN = {
 
 /* String Data: Manufacturer = "Phoenix Systems" */
 static const usb_string_desc_t dStrMan = {
-	.bLength = 2 * 15 + 2,
+	.bLength = ((sizeof(CDC_CLIENT_MFG_NAME) - 1) * 2) + 2,
 	.bDescriptorType = USB_DESC_STRING,
-	.wData = { 'P', 0, 'h', 0, 'o', 0, 'e', 0, 'n', 0, 'i', 0, 'x', 0, ' ', 0, 'S', 0, 'y', 0, 's', 0, 't', 0, 'e', 0, 'm', 0, 's', 0 }
+	.wData16 = USB_WIDE_STR(CDC_CLIENT_MFG_NAME),
 };
 
 
@@ -195,9 +227,9 @@ static const usb_string_desc_t dStr0 = {
 
 /* String Data: Product = "Virtual COM Port" */
 static const usb_string_desc_t dStrProd = {
-	.bLength = 2 * 16 + 2,
+	.bLength = ((sizeof(CDC_CLIENT_PROD_NAME) - 1) * 2) + 2,
 	.bDescriptorType = USB_DESC_STRING,
-	.wData = { 'V', 0, 'i', 0, 'r', 0, 't', 0, 'u', 0, 'a', 0, 'l', 0, ' ', 0, 'C', 0, 'O', 0, 'M', 0, ' ', 0, 'P', 0, 'o', 0, 'r', 0, 't', 0 }
+	.wData16 = USB_WIDE_STR(CDC_CLIENT_PROD_NAME),
 };
 
 
