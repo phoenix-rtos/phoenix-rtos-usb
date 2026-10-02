@@ -34,6 +34,7 @@
 #include "hcd.h"
 #include "hub.h"
 #include "log.h"
+#include "usbmon.h"
 
 #define N_STATUSTHRS   1
 #define STATUSTHR_PRIO 3
@@ -128,6 +129,8 @@ int usb_transferSubmit(usb_transfer_t *t, usb_pipe_t *pipe, handle_t *cond)
 		memset(t->buffer, 0, t->size);
 	mutexUnlock(usb_common.transferLock);
 
+	usbmon_submit(t, pipe);
+
 	if ((ret = hcd->ops->transferEnqueue(hcd, t, pipe)) != 0)
 		return ret;
 
@@ -160,6 +163,8 @@ void usb_transferFinished(usb_transfer_t *t, int status)
 		t->transferred = 0;
 		t->error = -status;
 	}
+
+	usbmon_complete(t);
 
 	/* If recipient is not HCD, this is an URB transfer */
 	if (t->recipient != usb_drvType_hcd) {
@@ -334,6 +339,22 @@ static void usb_msgthr(void *arg)
 					case usb_msg_devdesc:
 						msg.o.err = usb_devFindDescFromOid(umsg->devdesc.oid, msg.o.data);
 						break;
+					case usb_msg_usbmon:
+						if (umsg->usbmon.action == usb_usbmon_start) {
+							if (msg.i.data == NULL || msg.i.size == 0 || strnlen(msg.i.data, msg.i.size) == msg.i.size) {
+								msg.o.err = -EINVAL;
+							}
+							else {
+								msg.o.err = usbmon_start(msg.i.data, umsg->usbmon.snaplen);
+							}
+						}
+						else if (umsg->usbmon.action == usb_usbmon_stop) {
+							msg.o.err = usbmon_stop();
+						}
+						else {
+							msg.o.err = -EINVAL;
+						}
+						break;
 					default:
 						msg.o.err = -EINVAL;
 						log_error("unsupported usb_msg type: %d\n", umsg->type);
@@ -391,8 +412,35 @@ static void usb_statusthr(void *arg)
 int main(int argc, char *argv[])
 {
 	oid_t oid;
-	int i;
+	int i, opt;
 	usb_driver_t *drv;
+	const char *pcap_path = NULL;
+
+	while ((opt = getopt(argc, argv, "m:")) != -1) {
+		switch (opt) {
+			case 'm':
+				pcap_path = optarg;
+				break;
+			default:
+				log_error("Usage: usb [-m pcap_path]\n");
+				return 1;
+		}
+	}
+
+#ifdef USBMON
+	if (usbmon_init(pcap_path) != 0) {
+		log_error("Failed to initialize USB monitor\n");
+		return 1;
+	}
+	if (pcap_path != NULL) {
+		log_msg("USB monitoring enabled, writing to %s\n", pcap_path);
+	}
+#else
+	if (pcap_path != NULL) {
+		log_error("USB monitoring not compiled in (build with USBMON=1)\n");
+		return 1;
+	}
+#endif
 
 	if (mutexCreate(&usb_common.transferLock) != 0) {
 		log_error("Can't create mutex!\n");
