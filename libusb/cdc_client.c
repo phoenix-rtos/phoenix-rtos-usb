@@ -51,9 +51,9 @@ struct {
 static const usb_device_desc_t dDev = {
 	.bLength = sizeof(usb_device_desc_t),
 	.bDescriptorType = USB_DESC_DEVICE,
-	.bcdUSB = 0x0002,
-	.bDeviceClass = 0x0,
-	.bDeviceSubClass = 0,
+	.bcdUSB = 0x0200,
+	.bDeviceClass = USB_CLASS_CDC,
+	.bDeviceSubClass = USB_SUBCLASS_ACM,
 	.bDeviceProtocol = 0,
 	.bMaxPacketSize0 = 64,
 	.idVendor = 0x16f9,
