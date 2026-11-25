@@ -854,6 +854,25 @@ static int usblibdrv_urbFree(usb_driver_t *drv, unsigned pipe, unsigned urb)
 }
 
 
+static int usblibdrv_urbCancel(usb_driver_t *drv, unsigned pipe, unsigned urb)
+{
+	log_trace("");
+	usb_urbcmd_t urbcmd = { 0 };
+	usb_drvpriv_t *drvpriv = (usb_drvpriv_t *)drv->hostPriv;
+	int ret;
+
+	urbcmd.pipeid = pipe;
+	urbcmd.urbid = urb;
+	urbcmd.cmd = urbcmd_cancel;
+
+	mutexLock(usbdrv_common.lock);
+	ret = _usb_handleUrbcmd(drvpriv, &urbcmd);
+	mutexUnlock(usbdrv_common.lock);
+
+	return ret;
+}
+
+
 static usb_transferOps_t usblibdrv_transferOps = {
 	.urbSyncCompleted = usblibdrv_urbSyncCompleted,
 	.urbAsyncCompleted = usblibdrv_urbAsyncCompleted,
@@ -866,6 +885,7 @@ static usb_pipeOps_t usblibdrv_pipeOps = {
 	.transferAsync = usblibdrv_urbTransferAsync,
 	.urbAlloc = usblibdrv_urbAlloc,
 	.urbFree = usblibdrv_urbFree,
+	.urbCancel = usblibdrv_urbCancel,
 };
 
 

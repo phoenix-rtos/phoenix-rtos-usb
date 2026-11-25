@@ -384,6 +384,29 @@ static int usbprocdrv_urbFree(usb_driver_t *drv, unsigned pipe, unsigned urb)
 }
 
 
+static int usbprocdrv_urbCancel(usb_driver_t *drv, unsigned pipe, unsigned urb)
+{
+	msg_t msg = { 0 };
+	usb_msg_t *umsg = (usb_msg_t *)msg.i.raw;
+	int ret;
+	usb_urbcmd_t *urbcmd = &umsg->urbcmd;
+
+	urbcmd->pipeid = pipe;
+	urbcmd->urbid = urb;
+	urbcmd->cmd = urbcmd_cancel;
+
+	msg.type = mtDevCtl;
+	umsg->type = usb_msg_urbcmd;
+
+	ret = msgSend(usbprocdrv_common.srvport, &msg);
+	if (ret < 0) {
+		return ret;
+	}
+
+	return 0;
+}
+
+
 static usb_pipeOps_t usbprocdrv_pipeOps = {
 	.open = usbprocdrv_open,
 	.submitSync = usbprocdrv_urbSubmitSync,
@@ -391,4 +414,5 @@ static usb_pipeOps_t usbprocdrv_pipeOps = {
 
 	.urbFree = usbprocdrv_urbFree,
 	.urbAlloc = usbprocdrv_urbAlloc,
+	.urbCancel = usbprocdrv_urbCancel,
 };

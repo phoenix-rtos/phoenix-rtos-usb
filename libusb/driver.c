@@ -60,6 +60,12 @@ int usb_urbFree(usb_driver_t *drv, unsigned pipe, unsigned urb)
 }
 
 
+int usb_urbCancel(usb_driver_t *drv, unsigned pipe, unsigned urb)
+{
+	return drv->pipeOps->urbCancel(drv, pipe, urb);
+}
+
+
 int usb_transferAsync(usb_driver_t *drv, unsigned pipe, unsigned urbid, size_t size, usb_setup_packet_t *setup)
 {
 	return drv->pipeOps->transferAsync(drv, pipe, urbid, size, setup);

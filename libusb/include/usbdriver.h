@@ -214,6 +214,7 @@ typedef struct {
 
 	int (*urbFree)(usb_driver_t *drv, unsigned pipe, unsigned urb);
 	int (*urbAlloc)(usb_driver_t *drv, unsigned pipe, void *data, usb_dir_t dir, size_t size, int type);
+	int (*urbCancel)(usb_driver_t *drv, unsigned pipe, unsigned urb);
 } usb_pipeOps_t;
 
 
@@ -257,6 +258,9 @@ int usb_urbAlloc(usb_driver_t *drv, unsigned pipe, void *data, usb_dir_t dir, si
 
 
 int usb_urbFree(usb_driver_t *drv, unsigned pipe, unsigned urb);
+
+
+int usb_urbCancel(usb_driver_t *drv, unsigned pipe, unsigned urb);
 
 
 int usb_clearFeatureHalt(usb_driver_t *drv, unsigned pipe, int ep);
