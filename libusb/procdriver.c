@@ -3,12 +3,13 @@
  *
  * libusb/procdriver.c
  *
- * Copyright 2021, 2024 Phoenix Systems
- * Author: Maciej Purski, Adam Greloch
+ * Copyright 2021, 2024, 2026 Phoenix Systems
+ * Author: Maciej Purski, Adam Greloch, Julian Uziembło
  *
- * %LICENSE%
+ * SPDX-License-Identifier: BSD-3-Clause
  */
 
+#include <assert.h>
 #include <errno.h>
 #include <sys/msg.h>
 #include <sys/mman.h>
@@ -37,12 +38,19 @@ static usb_pipeOps_t usbprocdrv_pipeOps;
 
 
 static struct {
-	unsigned srvport;
-	unsigned drvport;
+	unsigned int srvport;
+	unsigned int drvport;
+	usb_driver_t *driver;
+
+	struct {
+		handle_t tid;
+		char *stack;
+	} *threads;
+	size_t nthreads;
 } usbprocdrv_common;
 
 
-__attribute__((noreturn)) static void usb_thread(void *arg)
+static void usb_thread(void *arg)
 {
 	usb_driver_t *drv = (usb_driver_t *)arg;
 	msg_t msg = { 0 };
@@ -55,8 +63,7 @@ __attribute__((noreturn)) static void usb_thread(void *arg)
 		do {
 			ret = msgRecv(usbprocdrv_common.drvport, &msg, &rid);
 			if (ret < 0 && ret != -EINTR) {
-				log_error("error when receiving event from host\n");
-				continue;
+				break;
 			}
 		} while (ret == -EINTR);
 
@@ -83,6 +90,8 @@ __attribute__((noreturn)) static void usb_thread(void *arg)
 			log_error("error when replying to host\n");
 		}
 	}
+
+	endthread();
 }
 
 
@@ -92,6 +101,7 @@ static int usb_connect(usb_driver_t *drv)
 	usb_msg_t *umsg = (usb_msg_t *)&msg.i.raw;
 	const usb_device_id_t *filters = drv->filters;
 	unsigned int nfilters = drv->nfilters;
+	int ret;
 
 	msg.type = mtDevCtl;
 	msg.i.size = sizeof(*filters) * nfilters;
@@ -102,60 +112,146 @@ static int usb_connect(usb_driver_t *drv)
 	umsg->connect.nfilters = nfilters;
 	memcpy(umsg->connect.name, drv->name, USB_DRVNAME_MAX);
 
-	return msgSend(usbprocdrv_common.srvport, &msg) < 0;
+	ret = msgSend(usbprocdrv_common.srvport, &msg);
+	if (ret < 0) {
+		return ret;
+	}
+
+	return msg.o.err;
 }
 
 
-__attribute__((noreturn)) void usb_driverProcRun(usb_driver_t *drv, int prio, unsigned int nthreads, void *args)
+int usb_driverThreadpoolDestroy(usb_driver_t *drv)
+{
+	int err;
+
+	if (usbprocdrv_common.nthreads == 0) {
+		return -EINVAL;
+	}
+
+#ifndef NDEBUG
+	int tid = gettid();
+	for (int i = 0; i < usbprocdrv_common.nthreads; i++) {
+		assert(usbprocdrv_common.threads[i].tid != tid);
+	}
+#endif
+
+	if (usbprocdrv_common.drvport != 0) {
+		portDestroy(usbprocdrv_common.drvport);
+	}
+
+	if (usbprocdrv_common.threads != NULL && usbprocdrv_common.nthreads != 0) {
+		for (int i = 0; i < usbprocdrv_common.nthreads; i++) {
+			if (usbprocdrv_common.threads[i].tid != 0) {
+				do {
+					err = threadJoin(usbprocdrv_common.threads[i].tid, 0);
+				} while (err == -EINTR);
+			}
+
+			if (usbprocdrv_common.threads[i].stack != NULL && usbprocdrv_common.threads[i].stack != MAP_FAILED) {
+				munmap(usbprocdrv_common.threads[i].stack, USB_UMSG_STACKSIZE);
+			}
+		}
+	}
+
+	usbprocdrv_common.driver->ops.destroy(usbprocdrv_common.driver);
+
+	free(usbprocdrv_common.threads);
+	memset(&usbprocdrv_common, 0, sizeof(usbprocdrv_common));
+
+	return 0;
+}
+
+
+int usb_driverThreadpoolSpawn(usb_driver_t *drv, int prio, unsigned int nthreads, void *args, unsigned int flags)
 {
 	oid_t oid;
 	int ret, i;
-	void *stack;
+	unsigned int newThreads;
 
-	/* usb_driverProcRun is invoked iff drivers are in the proc variant */
+	if (nthreads == 0) {
+		return -EINVAL;
+	}
+
+	if (usbprocdrv_common.driver != NULL) {
+		return -EALREADY;
+	}
+
+	usbprocdrv_common.driver = drv;
+
+	/* usb_driverProcRun is invoked if drivers are in the proc variant */
 	drv->pipeOps = &usbprocdrv_pipeOps;
 
 	ret = drv->ops.init(drv, args);
 	if (ret < 0) {
 		log_error("%s: failed to initialize the driver [%d]", drv->name, ret);
-		exit(1);
+		return ret;
 	}
 
 	usb_hostLookup(&oid);
 	usbprocdrv_common.srvport = oid.port;
 
 	ret = portCreate(&usbprocdrv_common.drvport);
-	if (ret != 0) {
+	if (ret < 0) {
 		log_error("%s: failed to create port [%d]", drv->name, ret);
-		exit(1);
+		usb_driverThreadpoolDestroy(drv);
+		return ret;
+	}
+	usbprocdrv_common.nthreads = nthreads;
+
+	usbprocdrv_common.threads = calloc(nthreads, sizeof(*usbprocdrv_common.threads));
+	if (usbprocdrv_common.threads == NULL) {
+		log_error("%s: no memory for threads", drv->name);
+		usb_driverThreadpoolDestroy(drv);
+		return -ENOMEM;
+	}
+
+	newThreads = ((flags & USBPROCDRV_FLAG_REPLACE_CURRENT) != 0) ? (nthreads - 1) : nthreads;
+
+	for (i = 0; i < newThreads; i++) {
+		usbprocdrv_common.threads[i].stack = mmap(NULL, USB_UMSG_STACKSIZE, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+		if (usbprocdrv_common.threads[i].stack == MAP_FAILED) {
+			log_error("%s: mmap failed", drv->name);
+			usb_driverThreadpoolDestroy(drv);
+			return -ENOMEM;
+		}
+
+		ret = beginthreadex(usb_thread, prio, usbprocdrv_common.threads[i].stack, USB_UMSG_STACKSIZE, drv, &usbprocdrv_common.threads[i].tid);
+		if (ret < 0) {
+			log_error("%s: failed to start thread [%d]\n", drv->name, ret);
+			usb_driverThreadpoolDestroy(drv);
+			return ret;
+		}
+	}
+
+	if ((flags & USBPROCDRV_FLAG_REPLACE_CURRENT) != 0) {
+		ret = setPriority(prio);
+		if (ret < 0) {
+			log_error("%s: failed to set priority to %d\n", drv->name, prio);
+			usb_driverThreadpoolDestroy(drv);
+			return ret;
+		}
 	}
 
 	ret = usb_connect(drv);
 	if (ret < 0) {
 		log_error("%s: failed to connect to usbhost [%d]", drv->name, ret);
-		exit(1);
+		usb_driverThreadpoolDestroy(drv);
+		return ret;
 	}
 
-	for (i = 0; i + 1 < nthreads; i++) {
-		stack = mmap(NULL, USB_UMSG_STACKSIZE, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-		if (stack == MAP_FAILED) {
-			log_error("%s: mmap failed", drv->name);
-			exit(1);
-		}
-
-		ret = beginthread(usb_thread, prio, stack, USB_UMSG_STACKSIZE, drv);
-		if (ret < 0) {
-			log_error("%s: failed to start thread [%d]\n", drv->name, ret);
-			exit(1);
-		}
+	if ((flags & USBPROCDRV_FLAG_REPLACE_CURRENT) != 0) {
+		usbprocdrv_common.threads[i].tid = gettid();
+		usb_thread(drv);
 	}
 
-	if (setPriority(prio) < 0) {
-		log_error("%s: failed to set priority to %d\n", drv->name, prio);
-		exit(1);
-	}
+	return 0;
+}
 
-	usb_thread(drv);
+
+__attribute__((noreturn)) void usb_driverProcRun(usb_driver_t *drv, int prio, unsigned int nthreads, void *args)
+{
+	exit(usb_driverThreadpoolSpawn(drv, prio, nthreads, args, USBPROCDRV_FLAG_REPLACE_CURRENT) < 0 ? 1 : 0);
 }
 
 
@@ -288,6 +384,29 @@ static int usbprocdrv_urbFree(usb_driver_t *drv, unsigned pipe, unsigned urb)
 }
 
 
+static int usbprocdrv_urbCancel(usb_driver_t *drv, unsigned pipe, unsigned urb)
+{
+	msg_t msg = { 0 };
+	usb_msg_t *umsg = (usb_msg_t *)msg.i.raw;
+	int ret;
+	usb_urbcmd_t *urbcmd = &umsg->urbcmd;
+
+	urbcmd->pipeid = pipe;
+	urbcmd->urbid = urb;
+	urbcmd->cmd = urbcmd_cancel;
+
+	msg.type = mtDevCtl;
+	umsg->type = usb_msg_urbcmd;
+
+	ret = msgSend(usbprocdrv_common.srvport, &msg);
+	if (ret < 0) {
+		return ret;
+	}
+
+	return 0;
+}
+
+
 static usb_pipeOps_t usbprocdrv_pipeOps = {
 	.open = usbprocdrv_open,
 	.submitSync = usbprocdrv_urbSubmitSync,
@@ -295,4 +414,5 @@ static usb_pipeOps_t usbprocdrv_pipeOps = {
 
 	.urbFree = usbprocdrv_urbFree,
 	.urbAlloc = usbprocdrv_urbAlloc,
+	.urbCancel = usbprocdrv_urbCancel,
 };
